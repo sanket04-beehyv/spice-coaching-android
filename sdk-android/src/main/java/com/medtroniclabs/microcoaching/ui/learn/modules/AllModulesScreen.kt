@@ -18,6 +18,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.medtroniclabs.microcoaching.R
 import com.medtroniclabs.microcoaching.ui.common.SdkScreenHeader
+import com.medtroniclabs.microcoaching.ui.document.DocumentFileType
+import com.medtroniclabs.microcoaching.ui.document.labelRes
+import com.medtroniclabs.microcoaching.ui.learn.KnowledgeDocument
 import com.medtroniclabs.microcoaching.ui.learn.LearnModule
 import com.medtroniclabs.microcoaching.ui.learn.modules.components.ModuleTile
 import com.medtroniclabs.microcoaching.ui.learn.modules.components.ModuleTileVariant
@@ -29,6 +32,7 @@ import com.medtroniclabs.microcoaching.ui.theme.SurfaceBackground
 /** Module-type tokens carried in the [AllModules] route argument. */
 const val ALL_MODULES_TYPE_TRAINING = "training"
 const val ALL_MODULES_TYPE_KNOWLEDGE = "knowledge"
+const val ALL_MODULES_TYPE_REFRESHER = "refresher"
 
 /**
  * Full-screen, scrollable grid of every module of one [moduleType] — reached
@@ -52,16 +56,20 @@ fun AllModulesScreen(
     onBack: () -> Unit,
     onHome: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    knowledgeDocuments: List<KnowledgeDocument> = emptyList(),
+    onDocSelect: (KnowledgeDocument) -> Unit = {},
+    cachedDocIds: Set<String> = emptySet(),
 ) {
-    val sections = ModuleCategorizer.categorize(modules)
-    val items = when (moduleType) {
-        ALL_MODULES_TYPE_KNOWLEDGE -> sections.knowledge
-        else -> sections.training
-    }
-    val titleRes = when (moduleType) {
-        ALL_MODULES_TYPE_KNOWLEDGE -> R.string.modules_section_knowledge
-        else -> R.string.modules_section_training
-    }
+    val isKnowledge = moduleType == ALL_MODULES_TYPE_KNOWLEDGE
+    // Knowledge renders source documents (passed in); Training renders the caller's
+    // list as-is. The caller (CoachingNavGraph) already passes the store's
+    // assignment-filtered `trainingModules`, which by design can include assigned
+    // `refresher` modules — re-running ModuleCategorizer here would re-drop those
+    // (its training partition is type-gated to initial_training/digital_proficiency),
+    // so we must NOT re-categorize.
+    val trainingItems = if (isKnowledge) emptyList() else modules
+    val titleRes = if (isKnowledge) R.string.modules_section_knowledge
+    else R.string.modules_section_training
 
     Column(
         modifier = modifier
@@ -83,19 +91,33 @@ fun AllModulesScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(items = items, key = { it.moduleFamilyId }) { module ->
-                    ModuleTile(
-                        title = module.title,
-                        subtitle = stringResource(
-                            R.string.training_meta_minutes_questions,
-                            module.estimatedMinutes ?: 5,
-                            module.inlineQuestions?.size ?: 0,
-                        ),
-                        variant = ModuleTileVariant.TRAINING,
-                        progress = progressFractionFor(module),
-                        onClick = { onSelect(module) },
-                        thumbnailUrl = module.thumbnailUrl,
-                    )
+                if (isKnowledge) {
+                    items(items = knowledgeDocuments, key = { it.sourceDocumentId }) { doc ->
+                        ModuleTile(
+                            title = doc.title,
+                            subtitle = stringResource(DocumentFileType.fromFilename(doc.fileName).labelRes),
+                            variant = ModuleTileVariant.KNOWLEDGE,
+                            knowledgeCached = doc.sourceDocumentId in cachedDocIds,
+                            onClick = { onDocSelect(doc) },
+                            onDownloadClick = { onDocSelect(doc) },
+                            thumbnailUrl = doc.thumbnailUrl,
+                        )
+                    }
+                } else {
+                    items(items = trainingItems, key = { it.moduleFamilyId }) { module ->
+                        ModuleTile(
+                            title = module.title,
+                            subtitle = stringResource(
+                                R.string.training_meta_minutes_questions,
+                                module.estimatedMinutes ?: 5,
+                                module.inlineQuestions?.size ?: 0,
+                            ),
+                            variant = ModuleTileVariant.TRAINING,
+                            progress = progressFractionFor(module),
+                            onClick = { onSelect(module) },
+                            thumbnailUrl = module.thumbnailUrl,
+                        )
+                    }
                 }
             }
         }

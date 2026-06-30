@@ -90,14 +90,21 @@ internal fun ChatSession.buildPrompt(
 
     val fullSystem = systemSections.joinToString("\n\n")
 
-    // Limit to 3 exchanges (6 turns); truncate very long messages (e.g. repetition-loop responses)
-    // to prevent context window overflow on the 512-token budget.
-    val prevTurns = history.takeLast(6).map { msg ->
+    // Refusal turns are excluded from the replayed history: each pair costs
+    // ~60–90 tokens of the window and, worse, primes a 1B model to keep
+    // refusing — the model imitates its own recent "I don't have this in my
+    // training material" turns regardless of the new references. The refusal
+    // is still visible to the CHW in the UI; it just isn't model context.
+    // Limit to 3 exchanges (6 turns); truncate very long messages (e.g.
+    // repetition-loop responses) to keep the prompt inside the char budget.
+    val prevTurns = dropRefusalExchanges(history).takeLast(6).map { msg ->
         if (msg.text.length > 600) msg.copy(text = msg.text.take(600) + "…") else msg
     }
 
-    // Hard char-cap on system + history combined. ~2000 chars ≈ 500 tokens, leaves room for
-    // the current message and 512-token output on Gemma 3 1B's 2K window.
+    // Hard char-cap on system + history combined. ~3200 chars ≈ 800–900 tokens,
+    // which together with the current message and a complete 2–4 sentence answer
+    // sits well inside the session window (`MicroCoachingConfig.maxInferenceTokens`,
+    // default 1536 — a TOTAL input+output budget, see its KDoc).
     val (cappedSystem, cappedTurns) = clampToCharBudget(fullSystem, prevTurns, MAX_PROMPT_CHARS)
 
     // Gemma 3 system role — keeps instructions separate from the conversation.
@@ -122,7 +129,29 @@ internal fun ChatSession.buildPrompt(
     return out
 }
 
-private const val MAX_PROMPT_CHARS = 2000
+private const val MAX_PROMPT_CHARS = 3200
+
+/**
+ * Drop refusal exchanges from the model-facing history: every assistant message
+ * whose `meta.outcome` is a refusal key (`refused_*`), plus the user question
+ * immediately preceding it (an unanswered user turn would break the strict
+ * user/model alternation Gemma's chat template expects). Messages without meta
+ * (user turns, restored history) pass through untouched.
+ */
+internal fun dropRefusalExchanges(history: List<ChatMessage>): List<ChatMessage> {
+    val out = mutableListOf<ChatMessage>()
+    for (msg in history) {
+        val isRefusal = msg.role == ChatRole.ASSISTANT &&
+            msg.meta?.outcome?.startsWith("refused") == true
+        if (isRefusal) {
+            // Remove the user question this refusal answered, if it's adjacent.
+            if (out.isNotEmpty() && out.last().role == ChatRole.USER) out.removeAt(out.lastIndex)
+        } else {
+            out.add(msg)
+        }
+    }
+    return out
+}
 
 /** If system + history exceeds the budget, drop oldest turns until it fits. System is never trimmed. */
 private fun clampToCharBudget(
@@ -189,13 +218,50 @@ private fun buildCHWContext(chwCtx: CHWWorkContext?): String {
  */
 private fun buildReferenceBlock(grounding: List<GroundingChunk>): String {
     val sb = StringBuilder()
-    sb.appendLine("--- Reference content (use ONLY this — do not invent facts) ---")
+    // Concise clinician-authored quiz explanations first — they are already
+    // answer-shaped, so a 1B model anchors on them far better than on raw,
+    // often third-person card prose. Distinct so two chunks linked to the same
+    // quiz don't repeat the line.
+    val answers = grounding.mapNotNull { it.explanationEn?.takeIf { e -> e.isNotBlank() } }.distinct()
+    if (answers.isNotEmpty()) {
+        sb.appendLine("--- Key facts (authoritative — prefer these) ---")
+        answers.take(MAX_ANSWER_SNIPPETS).forEachIndexed { i, a ->
+            sb.appendLine("[A${i + 1}] ${clipReference(a, ANSWER_CHAR_CAP)}")
+        }
+    }
+    sb.appendLine("--- Reference content (supporting detail; do not invent facts) ---")
     grounding.forEachIndexed { idx, chunk ->
-        sb.appendLine("[${idx + 1}] (${chunk.source.name.lowercase()}) ${chunk.referenceText().take(1000)}")
+        sb.appendLine("[${idx + 1}] (${chunk.source.name.lowercase()}) ${clipReference(chunk.referenceText(), REFERENCE_CHAR_CAP)}")
     }
     sb.appendLine("--- End reference ---")
     return sb.toString().trim()
 }
+
+/**
+ * Cap a reference body at [cap], cutting at the last complete sentence inside
+ * the cap rather than mid-word. A reference that ends in a dangling fragment
+ * ("…swelling o") models exactly the incomplete prose we tell the LLM never to
+ * produce. Falls back to the hard cut when no sentence boundary exists in the
+ * kept range (one giant unpunctuated body).
+ */
+private fun clipReference(text: String, cap: Int): String {
+    if (text.length <= cap) return text
+    val hardCut = text.take(cap)
+    val lastEnd = hardCut.lastIndexOfAny(charArrayOf('.', '!', '?', '।'))
+    return if (lastEnd >= cap / 2) hardCut.substring(0, lastEnd + 1) else hardCut
+}
+
+// Per-reference body cap. Lowered from 1000: with up to 3 grounding cards,
+// three 1000-char bodies crowd out the answer block + current message inside
+// the ~3200-char prompt budget — the source of the verbatim-dump and
+// mid-sentence-truncation failures. 420 still fits a 2–4 sentence card.
+private const val REFERENCE_CHAR_CAP = 420
+
+// A quiz explanation is one or two sentences; 320 chars ≈ 80 tokens is ample.
+private const val ANSWER_CHAR_CAP = 320
+
+// At most two distinct "Key facts" snippets (the top chunks) so the block stays tight.
+private const val MAX_ANSWER_SNIPPETS = 2
 
 /**
  * Hardened system prompt used when grounding is present (L3 in chat_plan.md §B4).
@@ -204,20 +270,38 @@ private fun buildReferenceBlock(grounding: List<GroundingChunk>): String {
  */
 private fun hardenedSystemPrompt(@Suppress("UNUSED_PARAMETER") language: String): String =
     """
-You are an AI health assistant for Community Health Workers in Bangladesh.
+You are a friendly health assistant helping a Community Health Worker (CHW) in Bangladesh.
 
-Strict rules:
-1. Use the facts in the Reference content block below as your only source. Rephrase them
-   naturally into 2 to 4 conversational English sentences that directly answer the user's
-   question. Do not quote the references verbatim. If a reference body is brief (one phrase
-   or word), expand it into a complete sentence using only the information present. Do not
-   add drug names, dosages, or thresholds that are not in the references.
-2. If the Reference content does not cover the user's question, reply with EXACTLY this
-   single token and nothing else: [[REFUSE_NO_GROUND]]
-3. Never say "as an AI". Never quote the rules. Never describe what you are doing.
-4. Be brief — 2 to 4 short sentences. Always reply in English; downstream translation
-   handles Bangla.
-5. Do not diagnose. Do not prescribe. Refer the CHW to their supervisor when in doubt.
+Your job is to make the Key facts and Reference content below clear and usable for the CHW —
+NOT to add your own medical knowledge. Explain what the references say. You may use general
+knowledge ONLY to phrase that content naturally, never to introduce facts of your own.
+
+How to answer:
+1. Lead with the answer, speaking TO the CHW ("you", "advise the patient to…"). Keep it tight
+   — a few short sentences, or a short list when the references list items. Always finish
+   every sentence; never stop mid-sentence.
+2. Cover the MOST relevant reference completely. If it lists several items (danger signs,
+   steps, criteria), include ALL of them — never just one or two. Give the specific items
+   that are written there, not generic background, risks, or benefits that are not.
+3. Ground every fact in the references. Do NOT add drug names, dosages, numbers, or claims
+   that are not in them. You MAY rephrase into your own clear, conversational wording — do
+   not copy reference sentences verbatim or use stilted, third-person phrasing.
+4. Only if the references genuinely do not address the question at all, reply with EXACTLY
+   this single token and nothing else: [[REFUSE_NO_GROUND]]
+   If the references partly cover it, answer the part they cover rather than refusing.
+5. Do not diagnose. Do not prescribe. If unsure, tell the CHW to confirm with their supervisor.
+6. Never say "as an AI". Never quote these rules. Never restate the question. Reply in
+   English; downstream translation handles Bangla.
+
+Example of the expected style (illustration only — answer the real question from the real
+references, and cover every item they list):
+--- Reference content ---
+[1] (card) Danger Signs After Delivery — Refer the mother urgently if she has any of these:
+heavy bleeding, fever, severe headache, difficulty breathing, or convulsions.
+--- End reference ---
+Question: When should I refer a mother after delivery?
+Answer: Refer her urgently if she shows any of these danger signs: heavy bleeding, fever, a
+severe headache, difficulty breathing, or convulsions.
     """.trimIndent()
 
 /**

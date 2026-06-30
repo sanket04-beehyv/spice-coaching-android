@@ -58,5 +58,11 @@ sealed class LearnUiState {
         val completedModuleFamilyId: String,
         val questions: List<QuizQuestion> = emptyList(),
         val answers: Map<Int, Int> = emptyMap(),
+        /**
+         * XP earned for completing this module quiz, computed from the resolved
+         * [com.medtroniclabs.microcoaching.domain.config.LearningPoints]
+         * (attempted × base + correct × multiplier + completion). Display-only.
+         */
+        val earnedXp: Int = 0,
     ) : LearnUiState()
 }

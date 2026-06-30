@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -43,6 +44,7 @@ import androidx.compose.ui.platform.rememberNestedScrollInteropConnection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.medtroniclabs.microcoaching.MicroCoachingSDK
 import com.medtroniclabs.microcoaching.R
 import com.medtroniclabs.microcoaching.ui.common.AnswerCard
 import com.medtroniclabs.microcoaching.ui.theme.SpiceBlue
@@ -78,6 +80,8 @@ fun SharedQuizInProgressContent(
     onAllAnswered: () -> Unit,
     modifier: Modifier = Modifier,
     onClose: (() -> Unit)? = null,
+    optionContainerColor: Color = Color.White,
+    lastQuestionFooter: (@Composable () -> Unit)? = null,
 ) {
     var currentIndex by rememberSaveable { mutableIntStateOf(0) }
     // questionIndex -> selectedAnswerIndex. Preserved across in-session navigation
@@ -95,6 +99,10 @@ fun SharedQuizInProgressContent(
 
     val scrollState = rememberScrollState()
     val showingFeedback = selectedForCurrent != null
+
+    // Per-correct-answer reward from the shared learning-points config
+    // (quiz_score_multiplier), not the legacy per-question pointValue.
+    val learningPoints by MicroCoachingSDK.getInstance().learningPoints.collectAsState()
 
     // Drives the celebratory XP burst. A fresh key flips on every first
     // correct tap; the burst self-dismisses after ~1.3 s. Resets per question
@@ -142,9 +150,11 @@ fun SharedQuizInProgressContent(
                 .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (question.caseSetup.isNotBlank()) {
-                RefresherCaseSetupBox(caseSetup = question.caseSetup)
-            }
+            // Case setup / "Context" block intentionally hidden per product
+            // direction — keep the data + composable, just don't render it.
+            // if (question.caseSetup.isNotBlank()) {
+            //     RefresherCaseSetupBox(caseSetup = question.caseSetup)
+            // }
             Text(
                 text = question.questionText,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
@@ -170,30 +180,36 @@ fun SharedQuizInProgressContent(
                         }
                     },
                     index = index,
+                    unselectedContainerColor = optionContainerColor,
                 )
             }
 
             // Inline reveal directly below the option cards — no more pinned
             // bottom overlay that hid scrollable content and complicated layout.
+            // On the last question a caller-supplied footer (e.g. the refresher
+            // "Next refresher / Done" actions) replaces the default Next button.
+            val isLastQuestion = safeIndex + 1 >= total
             InlineAnswerFeedback(
                 visible = showingFeedback,
                 explanation = question.explanation,
                 onNext = {
-                    if (safeIndex + 1 >= total) onAllAnswered()
+                    if (isLastQuestion) onAllAnswered()
                     else currentIndex = safeIndex + 1
                 },
+                footerOverride = if (isLastQuestion) lastQuestionFooter else null,
             )
         }
 
         // Celebratory XP burst overlay — sits above the scrolling content so
         // it pops in at the top of the answer area without displacing layout.
-        XpRewardBurst(
-            triggerKey = xpBurstKey,
-            pointValue = question.pointValue,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 16.dp),
-        )
+        // Points/XP display temporarily disabled — UI only; burst trigger + scoring logic retained.
+        // XpRewardBurst(
+        //     triggerKey = xpBurstKey,
+        //     pointValue = learningPoints.quizScoreMultiplier,
+        //     modifier = Modifier
+        //         .align(Alignment.TopCenter)
+        //         .padding(top = 16.dp),
+        // )
         }
     }
 }

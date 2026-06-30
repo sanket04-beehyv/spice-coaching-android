@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paths exposed by the MicroCoaching FileProvider.
+     AssetCache stores downloaded assets under filesDir/asset_cache/{kind}/.
+     Exposing the parent lets FileProvider share any cached asset (document,
+     image, video) via a content:// URI without needing network access. -->
+<paths>
+    <files-path name="microcoaching_asset_cache" path="asset_cache/" />
+</paths>

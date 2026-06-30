@@ -2,7 +2,6 @@ package com.medtroniclabs.microcoaching.network
 
 import com.medtroniclabs.microcoaching.MicroCoachingConfig
 import com.medtroniclabs.microcoaching.BuildConfig
-import android.util.Log
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -21,7 +20,6 @@ import java.util.concurrent.TimeUnit
  * own HTTP client to avoid coupling to SPICE's AppInterceptor configuration.
  */
 object NetworkModule {
-    private const val TAG = "NetworkModule"
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -63,9 +61,6 @@ object NetworkModule {
     fun createApiService(config: MicroCoachingConfig): CoachingApiService {
         val client = createOkHttpClient(config)
         val baseUrl = config.backendUrl.trimEnd('/') + "/"
-        if (baseUrl.startsWith("http://")) {
-            Log.w(TAG, "Cleartext backend URL configured. Use HTTPS for production environments.")
-        }
 
         return Retrofit.Builder()
             .baseUrl(baseUrl)

@@ -5,6 +5,8 @@ import androidx.room.Entity
 import androidx.room.Ignore
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import com.medtroniclabs.microcoaching.data.localized.LocalizedText
+import com.medtroniclabs.microcoaching.data.localized.toJsonString
 import com.medtroniclabs.microcoaching.network.SourceDocumentRef
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -46,17 +48,13 @@ data class ModuleEntity(
     @ColumnInfo(name = "version")
     val version: Int,
 
-    @ColumnInfo(name = "title_bn")
-    val titleBn: String,
+    /** Bilingual title as `{"bn":"...","en":"..."}` (v28+). */
+    @ColumnInfo(name = "title_json")
+    val titleJson: String = "{}",
 
-    @ColumnInfo(name = "title_en")
-    val titleEn: String? = null,
-
-    @ColumnInfo(name = "description_bn")
-    val descriptionBn: String? = null,
-
-    @ColumnInfo(name = "description_en")
-    val descriptionEn: String? = null,
+    /** Bilingual description as `{"bn":"...","en":"..."}` (v28+). */
+    @ColumnInfo(name = "description_json")
+    val descriptionJson: String = "{}",
 
     @ColumnInfo(name = "domain")
     val domain: String,
@@ -116,6 +114,35 @@ data class ModuleEntity(
     val sourceDocumentsJson: String = "[]",
 
     /**
+     * Raw module-level `search_metadata` object — author/clinician-curated
+     * retrieval hints (`keywords_en`, `keywords_bn`, `search_phrases_en/bn`,
+     * `synonyms_en`, `topic_tags`, `clinical_conditions`). Opaque to Room; parsed
+     * structurally by `ModuleKnowledgeIndex.build` and fed into the per-language
+     * BM25 token streams (module-scoped). `"{}"` for legacy rows that predate the
+     * v21→v22 migration.
+     */
+    @ColumnInfo(name = "search_metadata_json")
+    val searchMetadataJson: String = "{}",
+
+    /**
+     * The module's primary behavioural gap (`module.primary_gap_id`) — the gap a
+     * quiz attempt on this module is attributed to (mirrors the backend's
+     * `module.primary_gap_id` used by `gap_escalation_handler`). Null for modules
+     * with no behavioural gap. `"[]"`/null for legacy rows (v23→v24 migration).
+     */
+    @ColumnInfo(name = "primary_gap_id")
+    val primaryGapId: String? = null,
+
+    /**
+     * JSON array of all behavioural-gap UUIDs this module addresses
+     * (`module.behavioural_gap_ids` — the backend `module_behavioural_gap` junction
+     * denormalised, primary + secondary). Inverted on-device into
+     * [com.medtroniclabs.microcoaching.domain.gaps.ondevice.ModuleGapIndex.gapToFamilies].
+     */
+    @ColumnInfo(name = "behavioural_gap_ids_json")
+    val behaviouralGapIdsJson: String = "[]",
+
+    /**
      * Whether the backend has a thumbnail for this module version. Drives which
      * `module_id`s are sent to `/sync/modules/presigned-thumbnails`. Set from the
      * sync payload; the URL itself is populated separately by thumbnail sync.
@@ -143,6 +170,30 @@ data class ModuleEntity(
     @ColumnInfo(name = "last_synced")
     val lastSynced: Long = System.currentTimeMillis(),
 ) {
+    @get:Ignore
+    val title: LocalizedText
+        get() = LocalizedText.decode(titleJson)
+
+    @get:Ignore
+    val titleBn: String
+        get() = title.bn.orEmpty()
+
+    @get:Ignore
+    val titleEn: String?
+        get() = title.en
+
+    @get:Ignore
+    val description: LocalizedText
+        get() = LocalizedText.decode(descriptionJson)
+
+    @get:Ignore
+    val descriptionBn: String?
+        get() = description.bn
+
+    @get:Ignore
+    val descriptionEn: String?
+        get() = description.en
+
     @get:Ignore
     val questionCount: Int
         get() = runCatching { Json.parseToJsonElement(quizJson).jsonArray.size }.getOrDefault(0)
@@ -177,4 +228,66 @@ data class ModuleEntity(
                     .filter { it.isNotBlank() }
             }.getOrDefault(emptyList())
         }
+
+    /** All behavioural-gap UUIDs this module addresses, parsed from [behaviouralGapIdsJson]. */
+    @get:Ignore
+    val behaviouralGapIds: List<String>
+        get() = runCatching {
+            Json.parseToJsonElement(behaviouralGapIdsJson).jsonArray
+                .map { it.jsonPrimitive.content }
+                .filter { it.isNotBlank() }
+        }.getOrDefault(emptyList())
 }
+
+/**
+ * Display sort: domain, then Bengali title (English fallback). Applied in Kotlin
+ * because Android's bundled SQLite does not reliably expose `json_extract` for
+ * ordering on `title_json`.
+ */
+fun List<ModuleEntity>.sortedForDisplay(): List<ModuleEntity> =
+    sortedWith(
+        compareBy(
+            { it.domain },
+            { it.titleBn.ifBlank { it.titleEn.orEmpty() } },
+            { it.moduleId },
+        ),
+    )
+
+/** Test/fixture builder — keeps bilingual fields in `title_json` / `description_json`. */
+fun moduleEntityFixture(
+    moduleId: String,
+    moduleFamilyId: String,
+    version: Int = 1,
+    titleBn: String = "মডিউল",
+    titleEn: String? = null,
+    descriptionBn: String? = null,
+    descriptionEn: String? = null,
+    domain: String = "rmnch",
+    moduleType: String = "initial_training",
+    estimatedMinutes: Int = 10,
+    difficultyLevel: String = "moderate",
+    clinicallyReviewed: Boolean = true,
+    updatedAtIso: String = "2026-06-01T00:00:00Z",
+    cardsJson: String = "[]",
+    quizJson: String = "[]",
+    searchMetadataJson: String = "{}",
+    primaryGapId: String? = null,
+    behaviouralGapIdsJson: String = "[]",
+): ModuleEntity = ModuleEntity(
+    moduleId = moduleId,
+    moduleFamilyId = moduleFamilyId,
+    version = version,
+    titleJson = LocalizedText.fromBnEn(titleBn, titleEn).toJsonString(),
+    descriptionJson = LocalizedText.fromBnEn(descriptionBn, descriptionEn).toJsonString(),
+    domain = domain,
+    moduleType = moduleType,
+    estimatedMinutes = estimatedMinutes,
+    difficultyLevel = difficultyLevel,
+    clinicallyReviewed = clinicallyReviewed,
+    updatedAtIso = updatedAtIso,
+    cardsJson = cardsJson,
+    quizJson = quizJson,
+    searchMetadataJson = searchMetadataJson,
+    primaryGapId = primaryGapId,
+    behaviouralGapIdsJson = behaviouralGapIdsJson,
+)

@@ -16,3 +16,10 @@ val AssistantBubbleText = Color(0xFF1A1A1A)
 val SurfaceBackground = Color(0xFFFFFFFF)
 val InputBackground = Color(0xFFFFFFFF)
 val ErrorRed = Color(0xFFB00020)
+
+/**
+ * Soft surface tint used for quiz answer options inside the refresher bottom
+ * sheet (whose own background is white). Mirrors the Material3 light
+ * `surfaceContainerLow` so the options read as the sheet's old surface.
+ */
+val QuizOptionSurface = Color(0xFFF4F2FA)

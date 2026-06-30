@@ -11,7 +11,9 @@ import androidx.compose.material3.Text
 import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import com.medtroniclabs.microcoaching.MicroCoachingSDK
+import com.medtroniclabs.microcoaching.ui.asset.rememberCachedImageFile
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,8 +36,21 @@ import com.medtroniclabs.microcoaching.ui.theme.SpiceBlueContainer
  */
 @Composable
 internal fun RichImageBlock(image: RichBlock.Image, modifier: Modifier = Modifier) {
-    val url by produceState<String?>(initialValue = null, image.src, image.objectName) {
-        value = MediaUrlResolver.resolve(image.src, image.objectName)
+    // Stable cache key: prefer the media object_name; else the presigned URL's
+    // path (signature-independent). Resolves to a locally-cached file so the
+    // image renders offline after the first online view.
+    val key = remember(image.objectName, image.src) {
+        (image.objectName?.takeIf { it.isNotBlank() }
+            ?: MicroCoachingSDK.getInstance().assetCache.stableKeyForUrl(image.src))
+            .also {
+                Log.d(
+                    "RichImageBlock",
+                    "resolve start: objectName=${image.objectName} src=${image.src} -> key=$it",
+                )
+            }
+    }
+    val file by rememberCachedImageFile(key) {
+        MediaUrlResolver.resolve(image.src, image.objectName)
     }
 
     Box(
@@ -46,17 +61,17 @@ internal fun RichImageBlock(image: RichBlock.Image, modifier: Modifier = Modifie
             .background(SpiceBlueContainer.copy(alpha = 0.3f)),
         contentAlignment = Alignment.Center,
     ) {
-        if (url == null) {
+        if (file == null) {
             CircularProgressIndicator()
             return@Box
         }
-        val painter = rememberAsyncImagePainter(model = url)
+        val painter = rememberAsyncImagePainter(model = file)
         when (val state = painter.state) {
             is AsyncImagePainter.State.Loading -> CircularProgressIndicator()
             is AsyncImagePainter.State.Error -> {
                 Log.w(
                     "RichImageBlock",
-                    "Coil failed to load image url=$url: ${state.result.throwable}",
+                    "Coil failed to load cached image file=$file: ${state.result.throwable}",
                     state.result.throwable,
                 )
                 Text(
@@ -65,7 +80,7 @@ internal fun RichImageBlock(image: RichBlock.Image, modifier: Modifier = Modifie
                 )
             }
             is AsyncImagePainter.State.Success ->
-                Log.d("RichImageBlock", "Coil loaded image url=$url")
+                Log.d("RichImageBlock", "Coil loaded cached image file=$file")
             else -> Unit
         }
         Image(

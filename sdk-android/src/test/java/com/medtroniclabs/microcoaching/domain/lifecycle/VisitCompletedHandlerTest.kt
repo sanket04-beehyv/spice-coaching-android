@@ -88,6 +88,13 @@ class VisitCompletedHandlerTest {
             emptyList()
         override suspend fun getLatestWrongQuestionIds(chwId: String, moduleFamilyId: String): List<String> =
             emptyList()
+        override suspend fun getLatestCorrectQuestionIdsSince(
+            chwId: String,
+            moduleFamilyId: String,
+            sinceMillis: Long,
+        ): List<String> = emptyList()
+        override suspend fun getReplayableForGapState(chwId: String): List<CoachingEventEntity> = emptyList()
+        override suspend fun getUnsyncedQuizAttempts(chwId: String): List<CoachingEventEntity> = emptyList()
         override fun getEventCountFlow(): Flow<Int> = flowOf(0)
         override suspend fun markSynced(eventIds: List<String>, syncedAt: Long) = Unit
         override suspend fun markFailed(eventIds: List<String>) = Unit

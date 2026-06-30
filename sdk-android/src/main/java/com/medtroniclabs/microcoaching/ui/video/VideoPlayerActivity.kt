@@ -13,17 +13,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.lifecycleScope
-import androidx.media3.common.MediaItem
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import com.medtroniclabs.microcoaching.R
 import com.medtroniclabs.microcoaching.network.MediaUrlResolver
 import com.medtroniclabs.microcoaching.ui.SdkLocalizedTheme
@@ -117,23 +112,4 @@ private fun VideoPlayerScreen(
             }
         }
     }
-}
-
-@Composable
-private fun ExoPlayerSurface(url: String) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val player = androidx.compose.runtime.remember(url) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(url))
-            prepare()
-            playWhenReady = true
-        }
-    }
-    DisposableEffect(player) {
-        onDispose { player.release() }
-    }
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx -> PlayerView(ctx).apply { this.player = player } },
-    )
 }

@@ -3,13 +3,16 @@ package com.medtroniclabs.microcoaching.sync
 import android.util.Log
 import com.medtroniclabs.microcoaching.BuildConfig
 import com.medtroniclabs.microcoaching.data.db.MicroCoachingDatabase
+import com.medtroniclabs.microcoaching.data.db.entity.AssignedModuleEntity
 import com.medtroniclabs.microcoaching.data.db.entity.DigitalProficiencyEventEntity
 import com.medtroniclabs.microcoaching.data.mapper.toConfigEntities
 import com.medtroniclabs.microcoaching.data.mapper.toEntity
 import com.medtroniclabs.microcoaching.data.mapper.toPayload
 import com.medtroniclabs.microcoaching.data.db.entity.MorningCardCacheEntity
 import com.medtroniclabs.microcoaching.network.CoachingApiService
+import com.medtroniclabs.microcoaching.data.db.entity.SourceDocumentThumbnailEntity
 import com.medtroniclabs.microcoaching.network.ModuleThumbnailPresignedUrlRequest
+import com.medtroniclabs.microcoaching.network.SourceDocumentThumbnailPresignedUrlRequest
 import com.medtroniclabs.microcoaching.network.SyncDefaults
 import com.medtroniclabs.microcoaching.network.TelemetryBatch
 import java.io.IOException
@@ -37,6 +40,7 @@ class SyncApi(
     private val chwId: String,
     private val tenantId: String? = null,
     private val sdkVersion: String = BuildConfig.SDK_VERSION,
+    private val syncPrefs: SyncPrefs? = null,
 ) {
 
     /** Running count of telemetry inserts that themselves failed (see [recordSyncAttempt]). */
@@ -203,6 +207,10 @@ class SyncApi(
         sinceWatermark: String?,
         forceFullCatalogue: Boolean = false,
     ): ModulesResult {
+        // Single `/sync/modules` call (with `user_id`): the backend returns the
+        // full published catalogue (cached in `module_cache`, powers BM25) AND the
+        // caller's `assigned_module_ids`. We populate both `module_cache` and the
+        // `assigned_module` join table from this one response — no second call.
         return try {
             val localCount = db.moduleDao().countActive()
             val effectiveSince = when {
@@ -216,7 +224,7 @@ class SyncApi(
                 val why = if (forceFullCatalogue) "periodic retirement reconcile" else "cache empty"
                 Log.i(TAG, "Modules: requesting full bundle ($why; ignoring stored watermark $sinceWatermark).")
             }
-            val response = apiService.pullModules(since = effectiveSince)
+            val response = apiService.pullModules(since = effectiveSince, userId = chwId.ifBlank { null })
             val now = System.currentTimeMillis()
 
             if (response.isSuccessful) {
@@ -252,19 +260,52 @@ class SyncApi(
                     val deletedRows = db.moduleDao().deleteByFamilyIds(retiredList)
                     val deletedBindings = db.moduleTriggerBindingDao().deleteByModuleFamilyIds(retiredList)
                     prunedCount += deletedRows
+                    syncPrefs?.addRetiredFamilyIds(toRetire)
                     Log.i(TAG, "Modules retirement: removed ${toRetire.size} family(ies) " +
                         "($deletedRows rows, $deletedBindings bindings) " +
                         "[explicit=${bundle.retiredFamilyIds.size}, fullCatalogue=$isFullCatalogue]: $toRetire")
                 }
+                // ── Assigned modules ── populate the join table from this same
+                // response. `assigned_module_ids` is the full current assignment set
+                // for the CHW (the version `module.id`); we resolve each id's family
+                // (from this bundle, else the cache) and reconcile. Skip entirely
+                // when no CHW (no user_id sent → list empty by contract). Never
+                // delete on an empty list — mirrors the module-cache "never prune on
+                // empty" safeguard, so a delta that omits the set can't wipe it.
+                val assignedCount = if (chwId.isNotBlank()) {
+                    val assignedIds = bundle.assignedModuleIds
+                    val familyByModuleId = rows.associate { it.moduleId to it.moduleFamilyId }
+                    val assignedRows = assignedIds.map { moduleId ->
+                        AssignedModuleEntity(
+                            userId = chwId,
+                            moduleId = moduleId,
+                            moduleFamilyId = familyByModuleId[moduleId]
+                                ?: db.moduleDao().getById(moduleId)?.moduleFamilyId,
+                            assignedAt = now,
+                            lastSynced = now,
+                        )
+                    }
+                    val dao = db.assignedModuleDao()
+                    if (assignedRows.isNotEmpty()) {
+                        dao.upsertAll(assignedRows)
+                        dao.deleteForUserNotIn(chwId, assignedIds)
+                    }
+                    assignedRows.size
+                } else {
+                    0
+                }
+
                 Log.i(
                     TAG,
                     "Modules sync OK: upserted=${rows.size} pruned=$prunedCount " +
+                        "assigned=$assignedCount " +
                         "families=${bundle.moduleFamilies.size} fullCatalogue=$isFullCatalogue " +
                         "server_time=${bundle.serverTimeUtc}",
                 )
                 ModulesResult(
                     upsertedCount = rows.size,
                     prunedCount = prunedCount,
+                    assignedCount = assignedCount,
                     newWatermark = bundle.serverTimeUtc,
                 )
             } else {
@@ -325,6 +366,11 @@ class SyncApi(
                     val domain = domainByGapId[state.behaviouralGapId] ?: "unknown"
                     db.chwGapProfileDao().upsert(state.toEntity(domain))
                 }
+                // Quiz-level refresher baseline (backend default mode). Additive to the
+                // gap states above; the on-device quiz engine reads this snapshot.
+                if (bundle.chwQuizQuestionStates.isNotEmpty()) {
+                    db.chwQuizQuestionStateDao().upsertAll(bundle.chwQuizQuestionStates.map { it.toEntity() })
+                }
                 bundle.chwModuleCompletions.forEach { completion ->
                     db.chwModuleCompletionDao().upsert(completion.toEntity())
                 }
@@ -337,6 +383,7 @@ class SyncApi(
                     TAG,
                     "Gaps sync OK: gaps=${gapRows.size} (with_rules=$withRules) " +
                         "states=${bundle.chwBehaviouralGapStates.size} " +
+                        "quizStates=${bundle.chwQuizQuestionStates.size} " +
                         "completions=${bundle.chwModuleCompletions.size} " +
                         "partials=${bundle.chwModulePartialCompletions.size} server_time=${bundle.serverTimeUtc}",
                 )
@@ -389,7 +436,18 @@ class SyncApi(
                 val bundle = response.body()!!
                 val activeTriggers = bundle.triggers.filter { it.status != "deprecated" }.map { it.toEntity(now) }
                 val deprecatedTriggerIds = bundle.triggers.filter { it.status == "deprecated" }.map { it.id }
-                val bindings = bundle.bindings.map { it.toEntity(now) }
+                // Backend binds to a specific module_id; resolve it to the module family
+                // (modules sync before triggers). Drop bindings whose module isn't cached.
+                var unresolvedBindings = 0
+                val bindings = bundle.bindings.mapNotNull { payload ->
+                    val family = db.moduleDao().getById(payload.moduleId)?.moduleFamilyId
+                    if (family == null) {
+                        unresolvedBindings++
+                        null
+                    } else {
+                        payload.toEntity(moduleFamilyId = family, lastSynced = now)
+                    }
+                }
 
                 if (activeTriggers.isNotEmpty()) db.triggerDefinitionDao().upsertAll(activeTriggers)
                 if (deprecatedTriggerIds.isNotEmpty()) db.triggerDefinitionDao().deleteByIds(deprecatedTriggerIds)
@@ -406,7 +464,8 @@ class SyncApi(
                 Log.i(
                     TAG,
                     "Triggers sync OK: triggers=${activeTriggers.size} (pruned ${deprecatedTriggerIds.size}) " +
-                        "bindings=${bindings.size} server_time=${bundle.serverTimeUtc}",
+                        "bindings=${bindings.size} (dropped $unresolvedBindings unresolved module_id) " +
+                        "server_time=${bundle.serverTimeUtc}",
                 )
                 TriggersResult(
                     triggerCount = activeTriggers.size,
@@ -493,12 +552,19 @@ class SyncApi(
                         moduleFamilyId = item.moduleFamilyId,
                         source = item.source,
                         behaviouralGapId = item.behaviouralGapId,
+                        quizId = item.quizId,
                         rank = idx,
                         fetchedAt = now,
                     )
                 }
-                db.morningCardCacheDao().replaceAll(entities)
-                Log.i(TAG, "Morning cards sync OK: items=${entities.size} gap=${entities.count { it.source == "gap" }}")
+                // Replace only the backend rows — never the on-device gap cards
+                // (e.g. referral compliance), which coexist via `on_device = 1`.
+                db.morningCardCacheDao().replaceBackend(entities)
+                Log.i(
+                    TAG,
+                    "Morning cards sync OK: items=${entities.size} " +
+                        "quiz=${entities.count { it.source == "quiz" }} gap=${entities.count { it.source == "gap" }}",
+                )
                 MorningCardsResult(count = entities.size)
             } else {
                 val errorMsg = "HTTP ${response.code()}"
@@ -570,7 +636,162 @@ class SyncApi(
         }
     }
 
+    /**
+     * Fetches and caches presigned thumbnail URLs for source documents whose
+     * thumbnail is missing or expired. Mirrors [pullModuleThumbnails] exactly:
+     *
+     * 1. Collect all source-document IDs with `has_thumbnail = true` from the
+     *    module cache (parsed from `source_documents_json`).
+     * 2. Seed placeholder rows in `source_document_thumbnail` for any new IDs
+     *    not yet seen (so [idsNeedingThumbnail] can return them on the first pass).
+     * 3. Batch-fetch presigned URLs for IDs whose row is null/expired.
+     * 4. Write back URL + expiry per entry.
+     *
+     * Non-fatal: on failure the previous URL (if any) stays intact.
+     */
+    suspend fun pullSourceDocumentThumbnails(): ThumbnailsResult {
+        return try {
+            val nowSec = System.currentTimeMillis() / 1000L
+
+            // Collect all source-document IDs with hasThumbnail from module cache.
+            val allModules = db.moduleDao().getAllOrderedOnce()
+            val hasThumbnailIds = allModules
+                .flatMap { it.sourceDocuments }
+                .filter { it.hasThumbnail }
+                .map { it.id }
+                .distinct()
+
+            if (hasThumbnailIds.isEmpty()) {
+                Log.d(TAG, "Source-doc thumbnails sync: no documents with has_thumbnail — skipping.")
+                return ThumbnailsResult(updatedCount = 0)
+            }
+
+            // Seed placeholder rows so idsNeedingThumbnail can return them.
+            val placeholders = hasThumbnailIds.map { SourceDocumentThumbnailEntity(it) }
+            db.sourceDocumentThumbnailDao().insertIfAbsent(placeholders)
+
+            val ids = db.sourceDocumentThumbnailDao().idsNeedingThumbnail(nowSec)
+                .filter { it in hasThumbnailIds }
+
+            if (ids.isEmpty()) {
+                Log.d(TAG, "Source-doc thumbnails sync: nothing stale — skipping.")
+                return ThumbnailsResult(updatedCount = 0)
+            }
+
+            var updated = 0
+            var missing = 0
+            for (batch in ids.chunked(THUMBNAIL_BATCH_SIZE)) {
+                val response = apiService.getSourceDocumentThumbnailPresignedUrls(
+                    SourceDocumentThumbnailPresignedUrlRequest(sourceDocumentIds = batch),
+                )
+                if (!response.isSuccessful) {
+                    val errorMsg = "HTTP ${response.code()}"
+                    Log.w(TAG, "Source-doc thumbnails sync server error: $errorMsg")
+                    return ThumbnailsResult(
+                        updatedCount = updated,
+                        error = errorMsg,
+                        errorKind = httpKindFor(response.code()),
+                    )
+                }
+                val body = response.body() ?: continue
+                for (entry in body.urls) {
+                    if (entry.presignedUrl.isBlank()) continue
+                    val expiresAt = nowSec +
+                        (entry.expiresSeconds - THUMBNAIL_EXPIRY_SAFETY_MARGIN_SEC).coerceAtLeast(0)
+                    db.sourceDocumentThumbnailDao()
+                        .updateThumbnail(entry.sourceDocumentId, entry.presignedUrl, expiresAt)
+                    updated++
+                }
+                missing += body.missingIds.size
+            }
+            Log.i(TAG, "Source-doc thumbnails sync OK: requested=${ids.size} updated=$updated missing=$missing")
+            ThumbnailsResult(updatedCount = updated)
+        } catch (e: IOException) {
+            Log.w(TAG, "Source-doc thumbnails sync network error: ${e.message}")
+            ThumbnailsResult(error = e.message ?: "network error", errorKind = SyncErrorKind.NETWORK)
+        } catch (e: Exception) {
+            Log.w(TAG, "Source-doc thumbnails sync unexpected error: ${e.message}", e)
+            ThumbnailsResult(error = e.message ?: "unexpected error", errorKind = SyncErrorKind.UNEXPECTED)
+        }
+    }
+
+    /**
+     * Fetch the full published source-document catalogue and atomically replace
+     * the local [published_source_document] table — the durable source for the
+     * Knowledge section. Pages through `GET /sync/source-documents/published`
+     * with [PUBLISHED_DOCS_PAGE_SIZE] until a short page signals the end, then
+     * swaps the whole table in one transaction so the grid reflects exactly
+     * what's currently published (no stale rows).
+     *
+     * Inline presigned URLs (document + thumbnail) are persisted with absolute
+     * expiries so the list renders offline; they're refreshed every sync before
+     * they lapse. On any failure the previous catalogue is left intact (the
+     * replace only runs on a fully-successful paginate).
+     */
+    suspend fun pullPublishedSourceDocuments(): PublishedSourceDocumentsResult {
+        return try {
+            val nowSec = System.currentTimeMillis() / 1000L
+            val now = System.currentTimeMillis()
+            val rows = mutableListOf<com.medtroniclabs.microcoaching.data.db.entity.PublishedSourceDocumentEntity>()
+            var offset = 0
+            while (true) {
+                val response = apiService.getPublishedSourceDocuments(
+                    limit = PUBLISHED_DOCS_PAGE_SIZE,
+                    offset = offset,
+                )
+                if (!response.isSuccessful) {
+                    val errorMsg = "HTTP ${response.code()}"
+                    recordInboundFailure("inbound_published_docs", errorMsg)
+                    Log.w(TAG, "Published source-docs sync server error: $errorMsg")
+                    return PublishedSourceDocumentsResult(error = errorMsg, errorKind = httpKindFor(response.code()))
+                }
+                val page = response.body()?.sourceDocuments.orEmpty()
+                page.forEachIndexed { idx, item ->
+                    rows += com.medtroniclabs.microcoaching.data.db.entity.PublishedSourceDocumentEntity(
+                        sourceDocumentId = item.sourceDocumentId,
+                        title = item.title,
+                        originalFilename = item.originalFilename,
+                        presignedUrl = item.presignedUrl,
+                        presignedExpiresAt = item.presignedExpiresSeconds?.let { absoluteExpiry(nowSec, it) },
+                        thumbnailUrl = item.thumbnailPresignedUrl,
+                        thumbnailExpiresAt = item.thumbnailPresignedExpiresSeconds?.let { absoluteExpiry(nowSec, it) },
+                        rank = offset + idx,
+                        lastSynced = now,
+                    )
+                }
+                // A short (or empty) page means we've reached the end.
+                if (page.size < PUBLISHED_DOCS_PAGE_SIZE) break
+                offset += PUBLISHED_DOCS_PAGE_SIZE
+                // Defensive cap so a misbehaving backend can't loop forever.
+                if (offset >= PUBLISHED_DOCS_MAX) {
+                    Log.w(TAG, "Published source-docs sync hit the $PUBLISHED_DOCS_MAX-row cap — stopping pagination.")
+                    break
+                }
+            }
+
+            // De-dupe by id (the catalogue can contain repeated source ids across
+            // re-ingested files) keeping first-seen order; the table PK would
+            // otherwise drop later duplicates non-deterministically.
+            val deduped = rows.distinctBy { it.sourceDocumentId }
+            db.publishedSourceDocumentDao().replaceAll(deduped)
+            Log.i(TAG, "Published source-docs sync OK: fetched=${rows.size} stored=${deduped.size}")
+            PublishedSourceDocumentsResult(count = deduped.size)
+        } catch (e: IOException) {
+            recordInboundFailure("inbound_published_docs", e.javaClass.simpleName, offline = true)
+            Log.w(TAG, "Published source-docs sync network error: ${e.message}")
+            PublishedSourceDocumentsResult(error = e.message ?: "network error", errorKind = SyncErrorKind.NETWORK)
+        } catch (e: Exception) {
+            recordInboundFailure("inbound_published_docs", e.javaClass.simpleName)
+            Log.w(TAG, "Published source-docs sync unexpected error: ${e.message}", e)
+            PublishedSourceDocumentsResult(error = e.message ?: "unexpected error", errorKind = SyncErrorKind.UNEXPECTED)
+        }
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /** Relative URL lifetime → absolute epoch-second expiry, trimmed by the safety margin. */
+    private fun absoluteExpiry(nowSec: Long, expiresSeconds: Long): Long =
+        nowSec + (expiresSeconds - THUMBNAIL_EXPIRY_SAFETY_MARGIN_SEC).coerceAtLeast(0)
 
     /**
      * Classify an HTTP status code into the kind that drives WorkManager retry
@@ -639,6 +860,12 @@ class SyncApi(
         /** Max module ids per `/sync/modules/presigned-thumbnails` request. */
         private const val THUMBNAIL_BATCH_SIZE = 50
 
+        /** Page size for the published source-document catalogue pull. */
+        private const val PUBLISHED_DOCS_PAGE_SIZE = 200
+
+        /** Hard ceiling on total published docs fetched, guarding runaway pagination. */
+        private const val PUBLISHED_DOCS_MAX = 5_000
+
         /** Expire a few seconds early so a thumbnail URL never lapses mid-load. */
         private const val THUMBNAIL_EXPIRY_SAFETY_MARGIN_SEC = 10L
     }
@@ -687,6 +914,8 @@ data class OutboundResult(
 data class ModulesResult(
     val upsertedCount: Int = 0,
     val prunedCount: Int = 0,
+    /** Rows written to `assigned_module` for the CHW from this pull's `assigned_module_ids`. */
+    val assignedCount: Int = 0,
     val newWatermark: String? = null,
     val error: String? = null,
     override val errorKind: SyncErrorKind? = null,
@@ -741,6 +970,14 @@ data class MorningCardsResult(
 
 data class ThumbnailsResult(
     val updatedCount: Int = 0,
+    val error: String? = null,
+    override val errorKind: SyncErrorKind? = null,
+) : SyncResult {
+    override val success get() = error == null
+}
+
+data class PublishedSourceDocumentsResult(
+    val count: Int = 0,
     val error: String? = null,
     override val errorKind: SyncErrorKind? = null,
 ) : SyncResult {

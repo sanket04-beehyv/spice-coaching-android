@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.medtroniclabs.microcoaching.MicroCoachingSDK
 import com.medtroniclabs.microcoaching.ui.common.AnswerCard
 import com.medtroniclabs.microcoaching.ui.common.AnswerCardState
 import com.medtroniclabs.microcoaching.ui.common.AnswerFeedbackOverlay
@@ -41,6 +42,8 @@ fun QuickLearnContent(
     val question by viewModel.quickQuestion.collectAsState()
     val answerState by viewModel.answerState.collectAsState()
     val payload = question
+    // Per-correct-answer reward from the shared learning-points config.
+    val learningPoints by MicroCoachingSDK.getInstance().learningPoints.collectAsState()
 
     if (payload == null) {
         // Module sync hasn't populated morningModules yet — render an empty
@@ -80,7 +83,7 @@ fun QuickLearnContent(
         answerState?.let { outcome ->
             AnswerFeedbackOverlay(
                 isCorrect = outcome.isCorrect,
-                pointValue = payload.question.pointValue,
+                pointValue = learningPoints.quizScoreMultiplier,
                 correctAnswerText = payload.question.answers.getOrNull(payload.question.correctIndex) ?: "",
                 explanation = payload.question.explanation,
                 onDismiss = {

@@ -13,6 +13,10 @@ interface BehaviouralGapDao {
     @Query("SELECT * FROM behavioural_gap_cache WHERE status = 'active' ORDER BY domain, gap_code")
     fun getAllActive(): Flow<List<BehaviouralGapEntity>>
 
+    /** One-shot read of all active gaps — used to resolve severity for the refresher tiles. */
+    @Query("SELECT * FROM behavioural_gap_cache WHERE status = 'active'")
+    suspend fun getAllActiveOnce(): List<BehaviouralGapEntity>
+
     /**
      * Active gaps that carry a non-empty `detection_rule` envelope. Used by
      * [com.medtroniclabs.microcoaching.domain.gaps.GapRuleDispatcher] to iterate

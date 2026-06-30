@@ -2,6 +2,7 @@ package com.medtroniclabs.microcoaching.ui.common
 
 import com.medtroniclabs.microcoaching.Language
 import com.medtroniclabs.microcoaching.MicroCoachingSDK
+import com.medtroniclabs.microcoaching.data.localized.LocalizedText
 
 /**
  * Returns the display string for the current SDK language.
@@ -22,4 +23,8 @@ fun translatedText(bn: String?, en: String?): String {
         Language.BANGLA  -> bn?.takeIf { it.isNotBlank() } ?: en?.takeIf { it.isNotBlank() } ?: ""
     }
 }
+
+/** Locale-map overload — delegates to [translatedText] with bn/en fields. */
+fun translatedText(text: LocalizedText?): String =
+    translatedText(bn = text?.bn, en = text?.en)
 

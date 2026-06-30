@@ -2,6 +2,7 @@ package com.medtroniclabs.microcoaching.domain.telemetry
 
 import android.util.Log
 import com.medtroniclabs.microcoaching.BuildConfig
+import com.medtroniclabs.microcoaching.MicroCoachingSDK
 import com.medtroniclabs.microcoaching.data.db.dao.CoachingEventDao
 import com.medtroniclabs.microcoaching.data.db.entity.CoachingEventEntity
 import kotlinx.serialization.json.Json
@@ -39,6 +40,22 @@ fun eventFamilyFor(eventType: String): String = when (eventType) {
 }
 
 /**
+ * Maps a [com.medtroniclabs.microcoaching.ui.learn.LearnModule.source] value to
+ * the wire `trigger_type` per the v1.1 Events-Modelling spec:
+ *  - `"gap"` (gap-driven refresher) → `"gap"`
+ *  - `"fallback"` (server fallback recommendation) → `"fallback"`
+ *  - null (regular training-row quiz, no morning surface) → `"workflow_event"`
+ *
+ * Free function (not a method) so both [EventRecorder] callers and the
+ * `CoachingModuleStore` can resolve the trigger type without an instance.
+ */
+fun triggerTypeFor(source: String?): String = when (source) {
+    "gap" -> "gap"
+    "fallback" -> "fallback"
+    else -> "workflow_event"
+}
+
+/**
  * Append-only coaching event recorder. The single write path for all CHW interaction events.
  *
  * Replaces [TelemetryManager] for coaching-domain events. Writes directly to Room;
@@ -55,6 +72,14 @@ class EventRecorder(
     val sessionId: String,
     private val chwId: String,
     private val sdkVersion: String = BuildConfig.SDK_VERSION,
+    /**
+     * Optional host-app version string. When non-null it is written to the
+     * `sdk_version` column instead of [sdkVersion] — preserving the exact value
+     * `LearnViewModel.recordEvent` historically wrote (the SPICE host
+     * `versionName`, not the SDK's BuildConfig). Null for every other recorder,
+     * which keep emitting [BuildConfig.SDK_VERSION].
+     */
+    private val appVersionName: String? = null,
 ) {
 
     suspend fun recordSessionStart() {
@@ -237,6 +262,13 @@ class EventRecorder(
      *   snapshot at emission time.
      * @param payloadJson Optional structured detail for refusal rows. Pass
      *   `null` on the happy path.
+     * @param moduleId Version-specific UUID of the module that grounded the
+     *   served response (backend `module.id`). Events-Modelling v1.2 made this
+     *   mandatory for served turns — it is the module "used for forming the
+     *   response of the query" (the top cited module from the RAG response, or
+     *   the dominant grounding chunk's module on the on-device path). Left
+     *   `null` on refusal / inference-error / empty-response turns, where no
+     *   module formed a response. `module_family_id` stays null per the spec.
      */
     suspend fun recordDigitalHelpUsed(
         inferenceMode: String,
@@ -244,6 +276,7 @@ class EventRecorder(
         fallbackUsed: Boolean = false,
         networkState: String? = null,
         payloadJson: String? = null,
+        moduleId: String? = null,
     ) {
         dao.insert(
             build(
@@ -254,9 +287,10 @@ class EventRecorder(
                 fallbackUsed = fallbackUsed,
                 networkState = networkState,
                 payloadJson = payloadJson,
+                moduleId = moduleId,
             )
         )
-        Log.d(TAG, "[$sessionId] digital_help_used saved — mode=$inferenceMode validator=$validatorStatus fallback=$fallbackUsed network=$networkState")
+        Log.d(TAG, "[$sessionId] digital_help_used saved — module=$moduleId mode=$inferenceMode validator=$validatorStatus fallback=$fallbackUsed network=$networkState")
     }
 
     suspend fun recordModuleStarted(
@@ -485,6 +519,73 @@ class EventRecorder(
         )
     }
 
+    /**
+     * Generic coaching/learning event write — the single path the learn flow
+     * (module delivery, lesson cards, quiz attempts) records through. Mirrors
+     * the parameter surface, outcome derivation, and network-state fallback of
+     * the former `LearnViewModel.recordEvent`, so rows are byte-identical.
+     *
+     * `outcomeOverride` wins; otherwise a `module_quiz_attempted` row with a
+     * known [isCorrect] derives `"correct"`/`"wrong"` (per-question rows stay in
+     * sync with the aggregate finishQuiz path). When [networkState] is null it
+     * defaults to the SDK's ConnectivityManager snapshot so every event family
+     * shares one vocabulary. Wrapped in try/catch — a telemetry failure must
+     * never break the learn flow.
+     */
+    suspend fun recordCoachingEvent(
+        eventType: String,
+        clinicalDomain: String? = null,
+        cardType: String? = null,
+        quizQuestionId: String? = null,
+        selectedOption: Int? = null,
+        isCorrect: Boolean? = null,
+        moduleFamilyId: String? = null,
+        moduleId: String? = null,
+        moduleVersion: Int? = null,
+        cardFamilyId: String? = null,
+        quizFamilyId: String? = null,
+        quizScorePct: Float? = null,
+        outcomeOverride: String? = null,
+        behaviouralGapId: String? = null,
+        triggerType: String? = null,
+        inferenceMode: String? = null,
+        networkState: String? = null,
+    ) {
+        try {
+            val outcome = outcomeOverride ?: when {
+                eventType == "module_quiz_attempted" && isCorrect != null ->
+                    if (isCorrect) "correct" else "wrong"
+                else -> null
+            }
+            val resolvedNetworkState = networkState
+                ?: if (MicroCoachingSDK.getInstance().isNetworkAvailable()) "online" else "offline"
+
+            dao.insert(
+                build(
+                    eventType = eventType,
+                    clinicalDomain = clinicalDomain,
+                    cardType = cardType,
+                    triggerType = triggerType,
+                    inferenceMode = inferenceMode,
+                    quizQuestionId = quizQuestionId,
+                    selectedOption = selectedOption,
+                    isCorrect = isCorrect,
+                    outcome = outcome,
+                    networkState = resolvedNetworkState,
+                    moduleFamilyId = moduleFamilyId,
+                    moduleId = moduleId,
+                    cardFamilyId = cardFamilyId,
+                    quizFamilyId = quizFamilyId,
+                    moduleVersion = moduleVersion,
+                    quizScorePct = quizScorePct,
+                    behaviouralGapId = behaviouralGapId,
+                ),
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to record event '$eventType': ${e.message}")
+        }
+    }
+
     // ── Private builder ───────────────────────────────────────────────────────
 
     private fun build(
@@ -516,7 +617,7 @@ class EventRecorder(
         upazilaId: String? = null,
     ) = CoachingEventEntity(
         eventId = UUID.randomUUID().toString(),
-        sdkVersion = sdkVersion,
+        sdkVersion = appVersionName ?: sdkVersion,
         eventFamily = eventFamilyFor(eventType),
         sessionId = sessionId,
         chwId = chwId,

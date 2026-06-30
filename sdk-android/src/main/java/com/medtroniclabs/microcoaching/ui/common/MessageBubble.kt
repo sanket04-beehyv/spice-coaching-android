@@ -1,5 +1,11 @@
 package com.medtroniclabs.microcoaching.ui.common
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -25,6 +32,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.medtroniclabs.microcoaching.ui.chat.ChatMessage
 import com.medtroniclabs.microcoaching.ui.chat.ChatRole
+import com.medtroniclabs.microcoaching.ui.markdown.MarkdownDefaults
+import com.medtroniclabs.microcoaching.ui.markdown.MarkdownText
 import com.medtroniclabs.microcoaching.ui.theme.AssistantBubble
 import com.medtroniclabs.microcoaching.ui.theme.AssistantBubbleText
 import com.medtroniclabs.microcoaching.ui.theme.UserBubble
@@ -117,10 +126,17 @@ fun AssistantBubbleWithAvatar(
                 modifier = Modifier.widthIn(max = 260.dp),
                 shadowElevation = 0.dp,
             ) {
-                Text(
-                    text = message.text,
-                    color = AssistantBubbleText,
-                    style = MaterialTheme.typography.bodyMedium,
+                // The on-device model often replies in markdown (**bold**, `*`/`-`
+                // bullet lists, numbered steps). Render it through the SDK's GFM
+                // renderer so the CHW sees formatted text, not raw markers. Plain
+                // text (refusals, the welcome seed) flows through as a paragraph.
+                MarkdownText(
+                    content = message.text,
+                    style = MarkdownDefaults.style(
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        textColor = AssistantBubbleText,
+                        blockSpacing = 6.dp,
+                    ),
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 )
             }
@@ -163,11 +179,47 @@ fun StreamingBubble(
                 .widthIn(max = 260.dp),
             shadowElevation = 0.dp,
         ) {
-            Text(
-                text = if (text.isBlank()) "●●●" else text,
-                color = AssistantBubbleText,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            if (text.isBlank()) {
+                TypingDots(modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp))
+            } else {
+                Text(
+                    text = text,
+                    color = AssistantBubbleText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Three dots that light up sequentially — classic "typing" indicator.
+ * Each dot is active for one third of the 900 ms cycle, cycling left-to-right.
+ */
+@Composable
+private fun TypingDots(modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "typing")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "typing_phase",
+    )
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (i in 0..2) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(AssistantBubbleText.copy(alpha = if (phase.toInt() == i) 1f else 0.25f)),
             )
         }
     }

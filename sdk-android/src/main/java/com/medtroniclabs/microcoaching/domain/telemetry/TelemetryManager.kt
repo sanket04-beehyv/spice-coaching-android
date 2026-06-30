@@ -159,7 +159,7 @@ class TelemetryManager(private val config: MicroCoachingConfig) {
      * Parent should be the active chat.session span.
      *
      * @param modelName File name of the model (e.g. "gemma3-1B-it-int4.task")
-     * @param engineName "mediapipe" or "litertlm"
+     * @param engineName Inference engine identifier (e.g. "mediapipe")
      * @param sessionId Active session identifier
      */
     fun startInferenceStream(modelName: String, engineName: String, sessionId: String): Span {

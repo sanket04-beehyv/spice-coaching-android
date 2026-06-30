@@ -53,6 +53,7 @@ class InboundSyncWorker(
             db = db,
             sessionId = "inbound-sync",
             chwId = sdk.currentCHWId.orEmpty(),
+            syncPrefs = syncPrefs,
         )
 
         // v3 sync — four independent resource pulls. Each is non-fatal so one
@@ -85,6 +86,19 @@ class InboundSyncWorker(
         val thumbnailsResult = syncApi.pullModuleThumbnails()
         if (!thumbnailsResult.success) {
             Log.w(TAG, "Module thumbnails sync failed (non-fatal): ${thumbnailsResult.error}")
+        }
+
+        val docThumbnailsResult = syncApi.pullSourceDocumentThumbnails()
+        if (!docThumbnailsResult.success) {
+            Log.w(TAG, "Source-doc thumbnails sync failed (non-fatal): ${docThumbnailsResult.error}")
+        }
+
+        // Published source-document catalogue — backs the Knowledge section.
+        // Non-fatal and not part of the retry predicate: on failure the previous
+        // catalogue stays intact so the grid still renders offline.
+        val publishedDocsResult = syncApi.pullPublishedSourceDocuments()
+        if (!publishedDocsResult.success) {
+            Log.w(TAG, "Published source-docs sync failed (non-fatal): ${publishedDocsResult.error}")
         }
 
         val gapsResult = syncApi.pullGaps(syncPrefs.gapsWatermark, chwId = sdk.currentCHWId)
@@ -140,7 +154,9 @@ class InboundSyncWorker(
         Log.i(
             TAG,
             "Inbound sync complete. modules=${modulesResult.upsertedCount}, " +
+                "assigned=${modulesResult.assignedCount}, " +
                 "thumbnails=${thumbnailsResult.updatedCount}, " +
+                "publishedDocs=${publishedDocsResult.count}, " +
                 "gaps=${gapsResult.upsertedCount}, " +
                 "triggers=${triggersResult.triggerCount} bindings=${triggersResult.bindingCount}, " +
                 "config=${configResult.upsertedCount}, morningCards=${morningResult.count}.",

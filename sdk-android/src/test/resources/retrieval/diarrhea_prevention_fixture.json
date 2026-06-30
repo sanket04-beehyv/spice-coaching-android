@@ -1,0 +1,38 @@
+{
+  "id": "diarrhea_prevention",
+  "module_family_id": "4031b6f5-357b-464a-b5fa-882bf623bbff",
+  "title_en": "Diarrhea Management and Dehydration Assessment",
+  "cards": [
+    {
+      "title_en": "What is Diarrhea?",
+      "body_en": "Diarrhea is passing loose stools three or more times in a day."
+    },
+    {
+      "title_en": "Assessing for Dehydration",
+      "body_en": "Check skin pinch, thirst, and sunken eyes to classify dehydration."
+    },
+    {
+      "title_en": "Types of Diarrhea and Dehydration",
+      "body_en": "Acute watery diarrhea and dysentery require different management."
+    },
+    {
+      "title_en": "When to Refer a Diarrhea Patient to Hospital",
+      "body_en": "Refer immediately for blood in stool or inability to drink."
+    },
+    {
+      "title_en": "Diarrhea Prevention Measures",
+      "body_en": "Prevention includes hand washing, safe water, ORS use, and sanitation.",
+      "retrieval_hints_en": [
+        "what should be done to prevent diarrhea",
+        "how to prevent diarrhea in children"
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "query": "What should be done to prevent diarrhea?",
+      "expected_card_index": 4,
+      "benchmark_ref": "Q22"
+    }
+  ]
+}

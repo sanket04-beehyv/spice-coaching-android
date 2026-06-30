@@ -2,6 +2,7 @@ package com.medtroniclabs.microcoaching.data.mapper
 
 import com.medtroniclabs.microcoaching.data.db.entity.BehaviouralGapEntity
 import com.medtroniclabs.microcoaching.data.db.entity.ChwGapProfileEntity
+import com.medtroniclabs.microcoaching.data.db.entity.ChwQuizQuestionStateEntity
 import com.medtroniclabs.microcoaching.data.db.entity.ChwModuleCompletionEntity
 import com.medtroniclabs.microcoaching.data.db.entity.ChwModulePartialCompletionEntity
 import com.medtroniclabs.microcoaching.data.db.entity.ConfigThresholdEntity
@@ -10,6 +11,7 @@ import com.medtroniclabs.microcoaching.data.db.entity.ModuleTriggerBindingEntity
 import com.medtroniclabs.microcoaching.data.db.entity.TriggerDefinitionEntity
 import com.medtroniclabs.microcoaching.network.BehaviouralGapSyncPayload
 import com.medtroniclabs.microcoaching.network.ChwBehaviouralGapStateSyncPayload
+import com.medtroniclabs.microcoaching.network.ChwQuizQuestionStateSyncPayload
 import com.medtroniclabs.microcoaching.network.ChwModulePartialCompletionSyncPayload
 import com.medtroniclabs.microcoaching.network.ChwModuleCompletionSyncPayload
 import com.medtroniclabs.microcoaching.network.ModuleSyncPayload
@@ -22,6 +24,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import com.medtroniclabs.microcoaching.data.localized.toJsonString
 import java.time.Instant
 
 /**
@@ -50,10 +53,8 @@ fun ModuleSyncPayload.toEntity(lastSynced: Long): ModuleEntity = ModuleEntity(
     moduleId = id,
     moduleFamilyId = moduleFamilyId,
     version = version,
-    titleBn = titleBn,
-    titleEn = titleEn,
-    descriptionBn = descriptionBn,
-    descriptionEn = descriptionEn,
+    titleJson = resolvedTitle().toJsonString(),
+    descriptionJson = resolvedDescription().toJsonString(),
     domain = domain,
     subDomain = subDomain,
     moduleType = moduleType,
@@ -65,7 +66,7 @@ fun ModuleSyncPayload.toEntity(lastSynced: Long): ModuleEntity = ModuleEntity(
     publishedAtIso = publishedAt,
     updatedAtIso = updatedAt,
     cardsJson = bundleJson.encodeToString(jsonObjectListSerializer, cards),
-    quizJson = bundleJson.encodeToString(quizListSerializer, quiz),
+    quizJson = bundleJson.encodeToString(jsonObjectListSerializer, quiz),
     // Prefer the rich `source_documents`; if an older backend still sends only
     // `source_document_ids`, synthesise id-only refs so chips still render.
     sourceDocumentsJson = bundleJson.encodeToString(
@@ -77,6 +78,15 @@ fun ModuleSyncPayload.toEntity(lastSynced: Long): ModuleEntity = ModuleEntity(
         stringListSerializer,
         sourceDocuments.map { it.id }.ifEmpty { sourceDocumentIds },
     ),
+    // Persist the raw search_metadata object verbatim; ModuleKnowledgeIndex
+    // parses it structurally at index-build time. "{}" when the backend omits it.
+    searchMetadataJson = searchMetadata?.let {
+        bundleJson.encodeToString(JsonObject.serializer(), it)
+    } ?: "{}",
+    // Gap↔module link, embedded on the module (backend ships it here, not via
+    // trigger bindings). Drives ModuleGapIndex on-device.
+    primaryGapId = primaryGapId,
+    behaviouralGapIdsJson = bundleJson.encodeToString(stringListSerializer, behaviouralGapIds),
     hasThumbnail = hasThumbnail,
     // thumbnailUrl / thumbnailExpiresAtEpochSec are intentionally left at their
     // defaults (null): a module REPLACE resets them, and thumbnail sync
@@ -85,11 +95,9 @@ fun ModuleSyncPayload.toEntity(lastSynced: Long): ModuleEntity = ModuleEntity(
 )
 
 /**
- * Quiz is stored as raw JSON (one element per question). Re-serialising
- * preserves the exact field shape the renderer expects.
+ * Quiz is stored as raw JSON (one opaque object per question). Re-serialising
+ * preserves the exact field shape the renderer expects (legacy flat or locale maps).
  */
-private val quizListSerializer =
-    ListSerializer(com.medtroniclabs.microcoaching.network.ModuleQuizQuestionPayload.serializer())
 
 /** Serializer for the rich `source_documents` list stored in module_cache. */
 private val sourceDocumentRefListSerializer =
@@ -133,6 +141,21 @@ fun ChwBehaviouralGapStateSyncPayload.toEntity(
     lastFailedAttemptAt = parseIsoMillis(lastFailedAttemptAt),
     escalatedToSupervisor = escalatedToSupervisor,
 )
+
+/** Quiz-level refresher state → local baseline ([ChwQuizQuestionStateEntity]). */
+fun ChwQuizQuestionStateSyncPayload.toEntity(): ChwQuizQuestionStateEntity =
+    ChwQuizQuestionStateEntity(
+        chwId = chwId,
+        quizId = quizId,
+        moduleId = moduleId,
+        failedAttemptsCount = failedAttemptsCount,
+        lastFailedAttemptAt = parseIsoMillis(lastFailedAttemptAt),
+        firstAttemptAt = parseIsoMillis(firstAttemptAt),
+        lastAttemptAt = parseIsoMillis(lastAttemptAt),
+        escalatedToSupervisor = escalatedToSupervisor,
+        status = status,
+        lastSynced = parseIsoMillis(updatedAt),
+    )
 
 fun ChwModuleCompletionSyncPayload.toEntity(): ChwModuleCompletionEntity {
     val nowMillis = System.currentTimeMillis()
@@ -181,7 +204,12 @@ fun TriggerDefinitionSyncPayload.toEntity(lastSynced: Long): TriggerDefinitionEn
         lastSynced = lastSynced,
     )
 
-fun ModuleTriggerBindingSyncPayload.toEntity(lastSynced: Long): ModuleTriggerBindingEntity =
+/**
+ * The backend binds to a specific published `module_id`; the caller resolves it to
+ * the module's family ([moduleFamilyId]) before calling this (bindings whose module
+ * isn't cached are dropped at the call site).
+ */
+fun ModuleTriggerBindingSyncPayload.toEntity(moduleFamilyId: String, lastSynced: Long): ModuleTriggerBindingEntity =
     ModuleTriggerBindingEntity(
         bindingId = id,
         moduleFamilyId = moduleFamilyId,

@@ -117,7 +117,11 @@ fun CoachingChatSurface(
                 }
 
                 override fun onResult(transcript: String) {
-                    if (transcript.isNotBlank()) {
+                    // Guard: if the recording was already stopped externally (e.g.
+                    // user pressed Send while mic was active) AND the text field was
+                    // cleared by the send, don't repopulate. The partial transcript
+                    // was already captured and sent.
+                    if ((isRecording || inputState.text.isNotBlank()) && transcript.isNotBlank()) {
                         inputState.text = mergeDraft(preRecordingText, transcript)
                     }
                     isRecording = false
@@ -259,7 +263,7 @@ fun CoachingChatSurface(
             onDownloadVoiceModel = { sdk.sttModelManager.triggerBengaliDownload() },
             networkAvailable = networkAvailable,
             moduleTitleLookup = moduleTitleLookup,
-            onSourceDocTap = { id, label -> viewModel.openSourceDocument(id, label) },
+            onSourceDocTap = { id, label, startPage -> viewModel.openSourceDocument(id, label, startPage) },
             onClose = onClose,
             showCloseIcon = showCloseIcon,
         )

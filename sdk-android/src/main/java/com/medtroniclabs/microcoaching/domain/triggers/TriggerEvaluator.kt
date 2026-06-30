@@ -10,10 +10,8 @@ import com.medtroniclabs.microcoaching.data.db.dao.TriggerDefinitionDao
 import com.medtroniclabs.microcoaching.data.db.entity.ChwModuleCompletionEntity
 import com.medtroniclabs.microcoaching.data.db.entity.ModuleEntity
 import com.medtroniclabs.microcoaching.data.db.entity.TriggerDefinitionEntity
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -62,34 +60,6 @@ class TriggerEvaluator(
     suspend fun evaluate(chwId: String, signal: Signal): ModuleEntity? {
         val candidates = collectCandidates(chwId, signal)
         return candidates.maxByOrNull { it.second }?.first
-    }
-
-    /**
-     * Build a ranked list of modules for the morning routine. Combines
-     * gap-trigger evaluation with an `urgent_publish`-aware fallback when no
-     * bindings are present yet (bootstrap period before the backend has
-     * shipped trigger definitions). Returns up to [limit] modules.
-     */
-    suspend fun evaluateMorningList(chwId: String, limit: Int = 5): List<ModuleEntity> {
-        val candidates = collectCandidates(chwId, Signal.MorningOpen)
-        val ranked = candidates
-            .sortedByDescending { it.second }
-            .map { it.first }
-            .distinctBy { it.moduleFamilyId }
-
-        if (ranked.isNotEmpty()) return ranked.take(limit)
-
-        // Fallback when no triggers / bindings have been synced yet: surface
-        // every active module ordered for stable display. Keeps the morning
-        // routine useful during the bootstrap period.
-        val activeModules = moduleDao.getAllActive().firstOrNull().orEmpty()
-        return activeModules
-            .sortedWith(
-                compareByDescending<ModuleEntity> { it.clinicallyReviewed }
-                    .thenBy { it.domain }
-                    .thenBy { it.titleBn },
-            )
-            .take(limit)
     }
 
     private suspend fun collectCandidates(
@@ -147,19 +117,11 @@ class TriggerEvaluator(
     private fun matchesWorkflowPredicate(
         signal: Signal.WorkflowEvent,
         trigger: TriggerDefinitionEntity,
-    ): Boolean {
-        val predicate = parsePredicate(trigger.predicateJson) ?: return false
-        val expectedCode = predicate["spice_event_code"]?.jsonPrimitive?.contentOrNull
-            ?: return false
-        if (expectedCode != signal.spiceEventCode) return false
-
-        val payloadFilters = predicate["payload_filters"]?.jsonObject ?: return true
-        for ((k, v) in payloadFilters) {
-            val expected = (v as? JsonPrimitive)?.contentOrNull ?: continue
-            if (signal.payload[k] != expected) return false
-        }
-        return true
-    }
+    ): Boolean = matchesWorkflowPredicate(
+        predicateJson = trigger.predicateJson,
+        spiceEventCode = signal.spiceEventCode,
+        payload = signal.payload,
+    )
 
     private suspend fun resolveConfigInt(
         moduleFamilyId: String?,

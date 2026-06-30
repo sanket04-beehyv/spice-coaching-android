@@ -1,0 +1,39 @@
+{
+  "id": "first_aid_unconscious",
+  "module_family_id": "18126797-0211-49ec-93f1-67437175d703",
+  "title_en": "First Aid for Common Emergencies",
+  "cards": [
+    {
+      "title_en": "What is First Aid?",
+      "body_en": "First aid is immediate care given before professional help arrives."
+    },
+    {
+      "title_en": "First Aid for Drowning",
+      "body_en": "Remove the person from water and check breathing immediately."
+    },
+    {
+      "title_en": "First Aid for Cuts and Burns",
+      "body_en": "Clean wounds and cover burns with a clean cloth."
+    },
+    {
+      "title_en": "First Aid for Poisoning",
+      "body_en": "Do not induce vomiting; refer if symptoms are severe."
+    },
+    {
+      "title_en": "First Aid for Unconsciousness and Seizures",
+      "body_en": "Place unconscious person in recovery position; protect airway during seizures.",
+      "retrieval_hints_en": [
+        "first aid steps for an unconscious person",
+        "child fell unconscious what should I do",
+        "not responding after playing in the sun"
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "query": "A child fell unconscious after playing in the sun. What first aid steps should I take for an unconscious person?",
+      "expected_card_index": 4,
+      "benchmark_ref": "Q48"
+    }
+  ]
+}

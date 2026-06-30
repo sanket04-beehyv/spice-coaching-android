@@ -42,7 +42,7 @@ import com.medtroniclabs.microcoaching.ui.theme.SpiceBlueDark
  * Embeddable coaching card for the SPICE home screen — replaces the Learn FAB.
  *
  * Shows the active morning coaching module in a blue gradient card with
- * "Start" and "Skip today" actions. The host renders this in its home screen
+ * "Start" and "Skip" actions. The host renders this in its home screen
  * layout using a `ComposeView` (no Activity launch needed until the user taps
  * "Start").
  *

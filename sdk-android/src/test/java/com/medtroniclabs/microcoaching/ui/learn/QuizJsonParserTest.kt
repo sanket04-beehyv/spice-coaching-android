@@ -166,4 +166,31 @@ class QuizJsonParserTest {
         val q = parseInlineQuiz(json).first()
         assertEquals("কেস সেটআপ বিবরণ", q.caseSetup)
     }
+
+    @Test
+    fun `parses new locale-map quiz row`() {
+        val json = """
+            [
+              {
+                "id": "4be36040-4b8c-471f-9515-dcb607a0a68c",
+                "question_order": 1,
+                "question": {"bn": "Test08", "en": ""},
+                "case_setup": {},
+                "options": {
+                  "bn": ["", "", "", ""],
+                  "en": ["Option 1", "Option 2"]
+                },
+                "correct_indices": [0],
+                "explanation": {"en": ""},
+                "difficulty": "medium"
+              }
+            ]
+        """.trimIndent()
+
+        val questions = parseInlineQuiz(json, lang = "en")
+        assertEquals(1, questions.size)
+        val q = questions.first()
+        assertEquals("Test08", q.questionText)
+        assertEquals(listOf("Option 1", "Option 2"), q.answers)
+    }
 }

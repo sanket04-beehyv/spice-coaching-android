@@ -108,6 +108,27 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="false" />
 
+        <!--
+            FileProvider for sharing locally-cached source documents with
+            external apps (e.g. Google Docs, Microsoft Office) when the
+            document format cannot be previewed in-app.
+
+            Authority uses ${applicationId} so it is unique per host app and
+            never collides with the host's own provider.
+            Exported=false + grantUriPermissions=true is the standard pattern
+            for in-app file sharing — only activities we explicitly grant URIs
+            to can read the file.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.microcoaching.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/microcoaching_file_paths" />
+        </provider>
+
         <!-- AndroidX App Startup initializer — zero boilerplate for SPICE -->
         <provider
             android:name="androidx.startup.InitializationProvider"

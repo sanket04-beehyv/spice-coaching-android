@@ -25,6 +25,9 @@
     <string name="chat_source_default">সূত্র দলিল</string>
     <string name="chat_source_offline">অফলাইন</string>
     <string name="chat_source_unavailable">সূত্র দলিল পাওয়া যাচ্ছে না</string>
+    <string name="chat_source_open_externally">ব্রাউজারে খুলুন</string>
+    <string name="chat_source_page_prev">পূর্ববর্তী পৃষ্ঠা</string>
+    <string name="chat_source_page_next">পরবর্তী পৃষ্ঠা</string>
     <!-- Rich-card media (images / videos embedded in lesson card bodies). -->
     <string name="rich_media_unavailable">মিডিয়া পাওয়া যাচ্ছে না</string>
     <string name="rich_image_content_description">পাঠের ছবি</string>
@@ -36,23 +39,15 @@
     <string name="chat_model_download_description">কোচিং শুরু করতে AI মডেল ডাউনলোড করতে হবে।</string>
     <string name="chat_downloading_model_progress">মডেল ডাউনলোড হচ্ছে&#8230; (%1$d%%)</string>
     <string name="chat_downloading_model_preparing">মডেল ডাউনলোড হচ্ছে&#8230; (প্রস্তুত হচ্ছে)</string>
-    <string name="chat_model_size_hint">প্রায় ৬০০ মেগাবাইট প্রয়োজন। Wi-Fi ব্যবহার করুন।</string>
+    <string name="chat_model_size_hint">প্রায় %1$s প্রয়োজন। Wi-Fi ব্যবহার করুন।</string>
     <string name="chat_download_ai_model">AI মডেল ডাউনলোড করুন</string>
     <string name="chat_suggested_questions">প্রস্তাবিত প্রশ্ন</string>
     <string name="chat_next_question">পরবর্তী প্রশ্ন</string>
-    <!-- Mirror the EN order: index i in BN ↔ index i in EN, so used-tracking
-         (keyed on EN text via ChatSuggestionsRepository) stays consistent. -->
-    <string-array name="chat_seed_questions" translatable="true">
-        <item>৯০/৬০ লো বিপি সহ একজন গর্ভবতী মাকে আমি কী পরামর্শ দেব?</item>
-        <item>স্তন প্রদাহ ও ব্যথা কীভাবে সামলানো যাবে?</item>
-        <item>নবজাতকের জন্য প্রতি মিনিটে ২৫ বার শ্বাস কি স্বাভাবিক?</item>
-        <item>গর্ভবতী মহিলাকে রেফার করার জন্য বিপদ সংকেত কী কী?</item>
-        <item>মাকে কীভাবে শুধু বুকের দুধ খাওয়ানোর পরামর্শ দেব?</item>
-    </string-array>
     <string name="chat_input_placeholder">বার্তা লিখুন&#8230;</string>
     <string name="chat_send_message">বার্তা পাঠান</string>
     <string name="chat_header_title">এআই কোচ</string>
     <string name="chat_header_online">অনলাইন</string>
+    <string name="chat_header_offline">অফলাইন</string>
     <string name="chat_today">আজ</string>
     <string name="chat_welcome_message">আজ আমি কীভাবে সাহায্য করতে পারি? আপনি রোগী কাউন্সেলিং, ক্লিনিকাল প্রটোকল, গ্রোথ মনিটরিং, বা SPICE সম্পর্কে আমাকে জিজ্ঞাসা করতে পারেন।</string>
     <string name="chat_close_sheet">চ্যাট বন্ধ করুন</string>
@@ -133,6 +128,10 @@
     <string name="quiz_correct_answer">সঠিক উত্তর: %1$s</string>
     <string name="quiz_points">+%1$d পয়েন্ট</string>
     <string name="quiz_review_title">প্রশ্নের পর্যালোচনা</string>
+    <string name="quiz_score_summary">আপনি %2$d-এর মধ্যে %1$d টি সঠিক করেছেন</string>
+    <string name="quiz_your_answers">আপনার উত্তর</string>
+    <string name="quiz_xp_module_caption">মডিউলটি সম্পূর্ণ করার জন্য অর্জিত</string>
+    <string name="quiz_done">সম্পন্ন</string>
 
     <!-- ── FAB ───────────────────────────────────────────────────────────── -->
     <string name="fab_open_coaching">কোচিং খুলুন</string>
@@ -195,6 +194,8 @@
     <string name="lesson_player_next">পরবর্তী</string>
     <string name="lesson_player_previous">আগের</string>
     <string name="refresher_card_done">সম্পন্ন</string>
+    <string name="refresher_next">পরবর্তী রিফ্রেশার</string>
+    <string name="refresher_back">ফিরে যান</string>
     <string name="lesson_player_start_quiz">কুইজ শুরু করুন</string>
     <string name="lesson_player_back_to_modules">আরও মডিউল</string>
     <string name="quiz_try_again">আবার চেষ্টা করুন</string>
@@ -241,7 +242,7 @@
 
     <!-- ── Edge model dialogs ────────────────────────────────────────────── -->
     <string name="edge_model_required_title">এআই মডেল প্রয়োজন</string>
-    <string name="edge_model_required_msg">ব্যক্তিগত কোচিং কার্ড তৈরি করতে একটি স্থানীয় এআই মডেল প্রয়োজন। এখনই ডাউনলোড করবেন? (~৬০০ এমবি)</string>
+    <string name="edge_model_required_msg">ব্যক্তিগত কোচিং কার্ড তৈরি করতে একটি স্থানীয় এআই মডেল প্রয়োজন। এখনই ডাউনলোড করবেন? (~%1$s)</string>
     <string name="edge_model_download_btn">ডাউনলোড করুন</string>
     <string name="edge_model_later_btn">পরে</string>
     <string name="edge_error_title">এআই অনুপলব্ধ</string>
@@ -254,7 +255,7 @@
     <string name="learn_empty_no_internet">ইন্টারনেট সংযোগ নেই — ইন্টারনেটে সংযোগ দিয়ে আবার চেষ্টা করুন।</string>
     <string name="learn_empty_no_modules">এই মুহূর্তে কোনো লার্নিং মডিউল নেই। নতুন কন্টেন্ট প্রকাশিত হলে এখানে দেখা যাবে।</string>
     <string name="card_error_could_not_load">কার্ড লোড করা যায়নি।</string>
-    <string name="chat_error_no_response_available">কোনো উত্তর পাওয়া যায়নি — সংযোগ বা মডেল ডাউনলোড পরীক্ষা করুন।</string>
+    <string name="chat_error_no_response_available">এই মুহূর্তে উত্তর পাওয়া গেল না। আবার চেষ্টা করুন।</string>
     <string name="chat_error_no_response_generated">উত্তর তৈরি হয়নি — আবার চেষ্টা করুন।</string>
 
     <!-- ── Translation pack state chip (Block E) ────────────────────────── -->
@@ -282,6 +283,25 @@
     <string name="modules_section_training">প্রশিক্ষণ</string>
     <string name="modules_section_knowledge">জ্ঞান</string>
     <string name="modules_see_all">সব দেখুন</string>
+    <string name="refresher_empty_no_skipped">কোনো এড়িয়ে যাওয়া রিফ্রেশার নেই</string>
+    <string name="refresher_empty_none">এখনও কোনো রিফ্রেশার নেই।</string>
+    <string name="refresher_more">আরও</string>
+    <string name="knowledge_pdf_label">পিডিএফ</string>
+    <string name="knowledge_downloading">ডাউনলোড হচ্ছে… %1$s</string>
+    <string name="knowledge_doc_unavailable_offline">ডকুমেন্ট অফলাইনে উপলব্ধ নয়</string>
+    <string name="knowledge_view_cd">দেখুন</string>
+    <string name="doc_error_storage_full">এই ডকুমেন্ট ডাউনলোড করার জন্য পর্যাপ্ত স্টোরেজ নেই</string>
+    <string name="doc_type_pdf">পিডিএফ</string>
+    <string name="doc_type_presentation">স্লাইড</string>
+    <string name="doc_type_spreadsheet">স্প্রেডশিট</string>
+    <string name="doc_type_document">ডকুমেন্ট</string>
+    <string name="doc_type_image">ছবি</string>
+    <string name="doc_type_file">ফাইল</string>
+    <!-- Host coaching grid tile (CoachingGridTile). -->
+    <string name="coaching_tile_label">কোচিং</string>
+    <string name="coaching_tile_badge_cd">%1$d এড়িয়ে যাওয়া রিফ্রেশার</string>
+    <string name="doc_cannot_preview">এই ফাইলটি অ্যাপের মধ্যে প্রিভিউ করা যাচ্ছে না</string>
+    <string name="doc_open_with">অন্য অ্যাপ দিয়ে খুলুন</string>
 
     <!-- ── Refresher tile meta + categories ──────────────────────────────── -->
     <plurals name="refresher_meta_quiz">
@@ -293,6 +313,16 @@
     <string name="category_clinical_assessment">ক্লিনিকাল অ্যাসেসমেন্ট</string>
     <string name="category_learning">শেখা</string>
     <string name="category_spice_app">SPICE অ্যাপ</string>
+    <!-- Refresher content-type labels (shown on the refresher tile). -->
+    <string name="refresher_type_microcoaching">মাইক্রো-কোচিং</string>
+    <string name="refresher_type_learning_card">লার্নিং কার্ড</string>
+    <string name="refresher_type_quiz">কুইজ</string>
+    <!-- Behavioural-gap severity chips on the refresher tile. -->
+    <string name="severity_high">উচ্চ</string>
+    <string name="severity_moderate">মাঝারি</string>
+    <string name="severity_low">নিম্ন</string>
+    <!-- Refresher last-card footer secondary action. -->
+    <string name="refresher_do_it_later">পরে করব</string>
 
     <!-- ── Training / Knowledge metadata ─────────────────────────────────── -->
     <string name="training_meta_minutes_questions">%1$d মিনিট · %2$d প্রশ্ন</string>
@@ -302,6 +332,9 @@
 
     <!-- ── Modules screen header ─────────────────────────────────────────────── -->
     <string name="modules_screen_title">ব্যক্তিগত কোচিং</string>
+    <!-- Header subtitle on the coaching modules screen. %1$s is a formatted date-time. -->
+    <string name="modules_last_synced">সর্বশেষ সিঙ্ক %1$s</string>
+    <string name="modules_last_synced_never">এখনও সিঙ্ক হয়নি</string>
 
     <!-- ── Answer feedback overlay ───────────────────────────────────────────── -->
     <string name="feedback_why_this_matters">কেন এটি গুরুত্বপূর্ণ</string>
@@ -338,7 +371,7 @@
 
     <!-- ── Download item cards on ModelNotReady screen ─────────────────────────── -->
     <string name="download_card_ai_title">এআই মডেল</string>
-    <string name="download_card_ai_size">~৬০০ MB</string>
+    <string name="download_card_ai_size">~%1$s</string>
     <string name="download_card_voice_title">বাংলা ভয়েস মডেল</string>
     <string name="download_card_voice_size">~৯০ MB</string>
     <string name="download_card_label_required">প্রয়োজনীয়</string>

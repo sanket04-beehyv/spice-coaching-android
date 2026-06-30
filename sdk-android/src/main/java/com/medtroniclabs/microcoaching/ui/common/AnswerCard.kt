@@ -51,6 +51,9 @@ enum class AnswerCardState {
  * @param onClick Invoked when the card is tapped. Should be a no-op after the answer is revealed.
  * @param index 0-based position used to render the circular A/B/C/D badge on the left. Pass -1 to
  *   hide the badge (legacy back-compat).
+ * @param unselectedContainerColor Fill for the [AnswerCardState.Unselected] state. Defaults to
+ *   white (the standard full-screen quiz look); the refresher sheet passes a soft surface tint so
+ *   options read against its white background.
  */
 @Composable
 fun AnswerCard(
@@ -59,10 +62,11 @@ fun AnswerCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     index: Int = -1,
+    unselectedContainerColor: Color = Color.White,
 ) {
     val containerColor by animateColorAsState(
         targetValue = when (state) {
-            AnswerCardState.Unselected -> Color.White
+            AnswerCardState.Unselected -> unselectedContainerColor
             AnswerCardState.Selected -> MaterialTheme.colorScheme.primaryContainer
             AnswerCardState.CorrectRevealed -> Color(0xFFD7F0E5)
             AnswerCardState.WrongRevealed -> Color(0xFFFFEBEE)

@@ -5,7 +5,7 @@ import com.medtroniclabs.microcoaching.MicroCoachingConfig
 import com.medtroniclabs.microcoaching.data.db.MicroCoachingDatabase
 import com.medtroniclabs.microcoaching.data.db.entity.ModuleEntity
 import com.medtroniclabs.microcoaching.data.db.entity.MorningCardCacheEntity
-import com.medtroniclabs.microcoaching.domain.triggers.TriggerEvaluator
+import com.medtroniclabs.microcoaching.domain.gaps.ondevice.OnDeviceMorningGenerator
 import com.medtroniclabs.microcoaching.network.CoachingApiService
 import com.medtroniclabs.microcoaching.progress.toReinforceQuestionIds
 import com.medtroniclabs.microcoaching.sync.SyncApi
@@ -18,10 +18,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * (which was a god object) — behaviour is unchanged; this only relocates the
  * 4-tier resolution cluster behind a single collaborator.
  *
- * The four tiers, in order:
+ * The tiers, in order:
  *   1. seed from the local `morning_card_cache`,
- *   2. live `GET /morning/cards` refresh (replaces the cache),
- *   3. local [TriggerEvaluator] fallback when the cache is empty,
+ *   2. live `GET /morning/cards` refresh (writes the backend's selection),
+ *   3. on-device [OnDeviceMorningGenerator] — **always** runs; it merges gap-driven
+ *      cards the backend doesn't compute (e.g. referral compliance) on top of the
+ *      backend's, and is the sole source when the endpoint is unavailable / offline,
  *   4. fresh-CHW local fallback (first un-mastered, non-`content_update` module).
  *
  * The two state flows are owned by the SDK and passed in by reference so the
@@ -31,7 +33,7 @@ internal class MorningModuleResolver(
     private val database: MicroCoachingDatabase,
     private val config: MicroCoachingConfig,
     private val apiService: CoachingApiService,
-    private val triggerEvaluator: TriggerEvaluator,
+    private val onDeviceMorningGenerator: OnDeviceMorningGenerator,
     private val langCode: () -> String,
     private val morningModules: MutableStateFlow<List<ModuleEntity>>,
     private val morningCardsItems: MutableStateFlow<List<MorningCardCacheEntity>>,
@@ -43,9 +45,10 @@ internal class MorningModuleResolver(
      *
      * Step 1: seed the list immediately from the local cache (already-loaded from
      * DB or the in-memory [morningCardsItems] state).
-     * Step 2: attempt a live `GET /morning/cards` fetch; on success, replace the
-     * cache and recompute the ordered list.
-     * Step 3: fall back to the local [TriggerEvaluator] when the cache is empty.
+     * Step 2: attempt a live `GET /morning/cards` fetch; on success it writes the
+     * backend's selection into the cache.
+     * Step 3: always run the [OnDeviceMorningGenerator], which merges its gap-driven
+     * cards into the cache (assisting the backend, or standing in for it offline).
      */
     suspend fun refresh(chwId: String) {
         try {
@@ -56,7 +59,7 @@ internal class MorningModuleResolver(
             }
 
             if (config.backendUrl.isNotBlank()) {
-                // ── Live fetch in background ──
+                // ── Live fetch — writes the backend's selection into the cache ──
                 val syncApi = SyncApi(
                     apiService = apiService,
                     db = database,
@@ -68,22 +71,23 @@ internal class MorningModuleResolver(
                     tenantId = config.tenantId.takeIf { it.isNotBlank() },
                 )
                 if (result.success) {
-                    val fresh = database.morningCardCacheDao().getAllOrderedOnce()
-                    publish(fresh, chwId)
-                    Log.i(TAG, "Morning cards refreshed: ${result.count} items (gap=${fresh.count { it.source == "gap" }})")
+                    Log.i(TAG, "Morning cards live fetch OK: ${result.count} items")
                 } else {
                     Log.d(TAG, "Morning cards live fetch skipped/failed: ${result.error}")
                 }
             }
 
-            // ── Tier 3: local trigger evaluator when cache is still empty ──
-            if (morningModules.value.isEmpty()) {
-                val fallback = triggerEvaluator.evaluateMorningList(chwId)
-                morningModules.value = fallback.filter { keepIfHasReinforceQuestions(it, chwId) }
-                Log.d(TAG, "Morning modules via local TriggerEvaluator: ${fallback.size} (after reinforce filter: ${morningModules.value.size})")
-            }
+            // ── On-device generator ALWAYS runs (online and offline) ──
+            // It ASSISTS the backend's morning cards — adding gap-driven cards the
+            // backend doesn't compute (e.g. referral compliance) — and is the sole
+            // source when the endpoint is unavailable. It MERGES with any backend
+            // cards from the live fetch (preserving them), so it's no longer gated
+            // on the live fetch failing. `publish` then resolves + filters the union.
+            val generated = onDeviceMorningGenerator.generate(chwId, System.currentTimeMillis())
+            Log.i(TAG, "Morning cards on-device assist: +$generated item(s)")
+            publish(database.morningCardCacheDao().getAllOrderedOnce(), chwId)
 
-            // ── Tier 4: fresh-CHW local fallback ──
+            // ── Fresh-CHW local fallback ──
             applyLocalFallbackIfEmpty(chwId)
         } catch (e: Exception) {
             Log.w(TAG, "refreshMorningModules failed: ${e.message}")
@@ -122,32 +126,42 @@ internal class MorningModuleResolver(
         val allModules = database.moduleDao().getAllOrderedOnce()
         val matched = allModules.filter { it.moduleId in byId }
         val dropped = byId.keys - matched.map { it.moduleId }.toSet()
-        Log.d(TAG, "resolveFromCache: cache=${cache.size} allModules=${allModules.size} " +
-            "matched=${matched.size} dropped=${dropped.size}" +
-            (if (dropped.isNotEmpty()) " droppedIds=$dropped" else ""))
+        if (dropped.isNotEmpty()) {
+            // A selector emitted a card for a module that isn't in module_cache — a
+            // sync gap. We can't render content we don't have, but this must be LOUD
+            // (FIX AT SOURCE: /sync/modules), never a silent omission of a selector card.
+            Log.e(TAG, "resolveFromCache: ${dropped.size} morning-card module(s) MISSING from " +
+                "module_cache (not synced) — FIX AT SOURCE. droppedIds=$dropped")
+        } else {
+            Log.d(TAG, "resolveFromCache: cache=${cache.size} allModules=${allModules.size} matched=${matched.size}")
+        }
         return matched.sortedBy { byId[it.moduleId] ?: Int.MAX_VALUE }
     }
 
     /**
-     * Resolves the morning-card cache to modules, drops any module whose every
-     * quiz question the CHW has already answered correctly (no reinforce-set left),
-     * and publishes both the filtered cache list and the filtered module list
-     * together. Keeps backend-priority order intact.
+     * Resolves the morning-card cache to modules and publishes both the cache list
+     * and the module list together, in backend-priority order.
      *
-     * Modules with NO inline quiz survive — they have nothing to master so the
-     * filter doesn't apply.
+     * Filtering, in order:
+     *  1. [resolveFromCache] drops cards whose module isn't synced locally (logged loudly).
+     *  2. [keepIfHasReinforceQuestions] drops modules the CHW has **fully mastered
+     *     locally** — every quiz question attempted and its latest attempt correct — so a
+     *     refresher disappears once answered correctly, **offline and even over a stale
+     *     backend card**. Never-/partially-attempted modules (and quizless content) are
+     *     kept, and server-known partials are honoured, so a cross-device gap is never
+     *     wrongly dropped. (Quiz-level requirement; supersedes the earlier
+     *     selector-authoritative "no droppers" stance for the quiz era.)
      */
     private suspend fun publish(cache: List<MorningCardCacheEntity>, chwId: String) {
         val resolved = resolveFromCache(cache)
-        val filteredModules = resolved.filter { keepIfHasReinforceQuestions(it, chwId) }
-        val survivingIds = filteredModules.map { it.moduleId }.toSet()
-        val filteredCache = cache.filter { it.moduleId in survivingIds }
-        if (filteredCache.size != cache.size) {
-            Log.d(TAG, "publishMorningModules: filtered ${cache.size - filteredCache.size} mastered module(s); " +
-                "remaining=${filteredCache.size}")
+        val kept = resolved.filter { keepIfHasReinforceQuestions(it, chwId) }
+        val dropped = resolved.size - kept.size
+        if (dropped > 0) {
+            Log.i(TAG, "publish: dropped $dropped mastered module(s) (no local to-reinforce questions); kept=${kept.size}")
         }
-        morningCardsItems.value = filteredCache
-        morningModules.value = filteredModules
+        val keptIds = kept.map { it.moduleId }.toSet()
+        morningCardsItems.value = cache.filter { it.moduleId in keptIds }
+        morningModules.value = kept
     }
 
     /**

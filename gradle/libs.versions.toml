@@ -24,9 +24,8 @@ workManager = "2.10.1"
 opentelemetry = "1.48.0"
 opentelemetrySemconv = "1.30.0-alpha"
 
-# MediaPipe / LiteRT
+# MediaPipe
 mediapipeGenai = "0.10.24"
-litertlm = "0.10.0"
 
 # ML Kit Translation
 mlkitTranslate = "17.0.3"
@@ -55,7 +54,6 @@ androidxStartup = "1.2.0"
 
 # Coroutines
 kotlinxCoroutines = "1.10.2"
-securityCrypto = "1.1.0"
 
 [libraries]
 # AndroidX core
@@ -105,9 +103,6 @@ mediapipe-tasks-genai = { group = "com.google.mediapipe", name = "tasks-genai", 
 # ML Kit Translation (EN→BN on-device)
 mlkit-translate = { group = "com.google.mlkit", name = "translate", version.ref = "mlkitTranslate" }
 
-# LiteRT-LM (Gemma 4 on-device)
-litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
-
 # Networking
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
@@ -125,7 +120,6 @@ media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "medi
 
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
-androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }

@@ -3,6 +3,7 @@ package com.medtroniclabs.microcoaching.ai.inference
 import android.util.Log
 import com.medtroniclabs.microcoaching.MicroCoachingConfig
 import com.medtroniclabs.microcoaching.ModelDownloadStrategy
+import com.medtroniclabs.microcoaching.ai.model.ModelCatalog
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 
@@ -11,9 +12,8 @@ import java.io.File
  * file extension and device capability.
  *
  * Routing rules:
- *   - `.task`     → [GemmaService] (MediaPipe Gemma 3; works on all field devices)
- *   - `.litertlm` → [LiteRtLmService] (LiteRT-LM Gemma 4; requires 6+ GB RAM)
- *   - No model    → [isModelAvailable] = false; chat shows "download required" state
+ *   - `.task`  → [GemmaService] (MediaPipe Gemma 3; works on all field devices)
+ *   - No model → [isModelAvailable] = false; chat shows "download required" state
  *
  * This is the single point of truth for which LLM is active.
  *
@@ -28,7 +28,6 @@ import java.io.File
 class InferenceRouter(private val config: MicroCoachingConfig) {
 
     private val gemmaService = GemmaService(config.context)
-    private val liteRtLmService = LiteRtLmService(config.context)
 
     /** The currently active service, or null if no model is available. */
     var activeService: LLMService? = null
@@ -58,6 +57,19 @@ class InferenceRouter(private val config: MicroCoachingConfig) {
             }
         }
 
+        // Runtime guard — only the MediaPipe engine is bundled. A non-MediaPipe
+        // variant (e.g. a `.litertlm`) can't load until the LiteRT-LM runtime is
+        // re-added; fail loud rather than silently no-op.
+        val variant = config.selectedModelVariant()
+        if (!ModelCatalog.isRunnable(variant)) {
+            Log.e(
+                TAG,
+                "Selected model '${variant.id}' runtime=${variant.runtime} is not bundled — " +
+                    "no engine to load it (LiteRT-LM runtime not bundled). Chat stays in download/unavailable state.",
+            )
+            return null
+        }
+
         val modelFile = resolveModelFile() ?: run {
             Log.i(TAG, "No model file found — chat will show 'download required' state")
             return null
@@ -76,10 +88,14 @@ class InferenceRouter(private val config: MicroCoachingConfig) {
                 Log.d(TAG, "initializeIfModelPresent: service loaded by concurrent caller — adopting")
                 return@runCatching
             }
+            // Per-variant sampling overrides win; otherwise the global config
+            // defaults apply. Smaller models can carry their own tuned values
+            // in the catalog without touching the SDK config.
             val llmConfig = LLMConfiguration(
                 modelPath = modelFile.absolutePath,
-                maxTokens = config.maxInferenceTokens,
-                temperature = config.inferenceTemperature,
+                maxTokens = variant.maxTokens ?: config.maxInferenceTokens,
+                temperature = variant.temperature ?: config.inferenceTemperature,
+                topK = variant.topK ?: 40,
             )
             service.loadModel(llmConfig)
             activeService = service
@@ -97,8 +113,9 @@ class InferenceRouter(private val config: MicroCoachingConfig) {
      *
      * Priority order:
      *   1. [MicroCoachingConfig.modelPath] if explicitly set (PROVIDED strategy)
-     *   2. First `.task` file in app-internal files dir
-     *   3. First `.litertlm` file in app-internal files dir
+     *   2. The selected variant's exact [com.medtroniclabs.microcoaching.ai.model.ModelVariant.fileName]
+     *      in the external files dir (deterministic across coexisting variants —
+     *      no "first `.task`" ambiguity).
      */
     private fun resolveModelFile(): File? {
         if (config.modelPath.isNotBlank()) {
@@ -107,24 +124,24 @@ class InferenceRouter(private val config: MicroCoachingConfig) {
             Log.w(TAG, "Configured modelPath does not exist: ${config.modelPath}")
         }
 
-        val internalDir = config.context.filesDir ?: return null
-
-        // Prefer Gemma 3 (.task) for compatibility with field devices
-        return internalDir.listFiles()
-            ?.firstOrNull { it.extension == "task" }
-            ?: internalDir.listFiles()?.firstOrNull { it.extension == "litertlm" }
+        val externalDir = config.context.getExternalFilesDir(null) ?: return null
+        val expected = config.selectedModelVariant().fileName
+        return externalDir.listFiles()?.firstOrNull { it.name == expected }
     }
 
     private fun serviceForFile(file: File): LLMService? = when {
         file.name.endsWith(GemmaService.MODEL_EXTENSION) -> gemmaService
-        file.name.endsWith(LiteRtLmService.MODEL_EXTENSION) -> liteRtLmService
-        else -> null
+        else -> {
+            // A non-`.task` file (e.g. a `.litertlm`) has no bundled engine —
+            // the LiteRT-LM runtime was removed in 0.5.0 for APK size.
+            Log.e(TAG, "No engine for '${file.name}' — only MediaPipe `.task` is bundled (LiteRT-LM not bundled)")
+            null
+        }
     }
 
-    /** Release resources for both engines. */
+    /** Release the inference engine. */
     fun release() {
         gemmaService.unloadModel()
-        liteRtLmService.unloadModel()
         activeService = null
     }
 

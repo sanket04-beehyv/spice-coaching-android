@@ -32,13 +32,22 @@ data class MorningCardCacheEntity(
     @ColumnInfo(name = "module_family_id")
     val moduleFamilyId: String,
 
-    /** "gap" | "fallback" — used for the GAP badge on [RefresherTile]. */
+    /**
+     * "quiz" | "gap" | "fallback" | "visit" — used for the GAP badge on [RefresherTile].
+     * "quiz" = the backend's default quiz-level refresher (carries [quizId]); "visit" =
+     * an on-device card from the CHW's today's-visit stand-in (no behavioural gap; see
+     * [OnDeviceMorningSelector.selectFromTodaysAppointments]).
+     */
     @ColumnInfo(name = "source")
     val source: String,
 
     /** Non-null when [source] == "gap". Forwarded to telemetry payload. */
     @ColumnInfo(name = "behavioural_gap_id")
     val behaviouralGapId: String? = null,
+
+    /** Non-null when [source] == "quiz" — the `module_quiz_question.id` that triggered this. */
+    @ColumnInfo(name = "quiz_id")
+    val quizId: String? = null,
 
     /** Backend-suggested priority order. Lower rank = higher priority. */
     @ColumnInfo(name = "rank")
@@ -47,4 +56,14 @@ data class MorningCardCacheEntity(
     /** Epoch millis when this cache row was written. */
     @ColumnInfo(name = "fetched_at")
     val fetchedAt: Long = System.currentTimeMillis(),
+
+    /**
+     * Provenance: `false` = written by the backend `GET /morning/cards` fetch;
+     * `true` = computed on-device by [OnDeviceMorningGenerator] (gaps the backend
+     * doesn't compute, e.g. referral compliance). The two writers replace **only
+     * their own** rows ([MorningCardCacheDao.replaceBackend] / `replaceOnDevice`),
+     * so backend and on-device cards COEXIST instead of overwriting each other.
+     */
+    @ColumnInfo(name = "on_device")
+    val onDevice: Boolean = false,
 )

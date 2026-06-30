@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.layout.PaddingValues
 import com.medtroniclabs.microcoaching.R
 import com.medtroniclabs.microcoaching.ui.theme.SpiceBlue
 
@@ -124,6 +125,7 @@ fun AnswerFeedbackOverlay(
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SpiceBlue,
                     ),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 ) {
                     Text(
                         text = androidx.compose.ui.res.stringResource(R.string.quiz_next_question),
@@ -134,24 +136,25 @@ fun AnswerFeedbackOverlay(
         }
 
         // Floating "+N pts" text — only for correct answers
-        if (isCorrect) {
-            AnimatedVisibility(
-                visible = showPoints,
-                enter = fadeIn(tween(200)) + scaleIn(),
-                exit = fadeOut(tween(400)),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(y = animatedOffset.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.quiz_points, pointValue),
-                    color = Color(0xFF1B6B4A),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    modifier = Modifier.padding(end = 16.dp),
-                )
-            }
-        }
+        // Points/XP display temporarily disabled — UI only; [pointValue] + scoring logic retained.
+        // if (isCorrect) {
+        //     AnimatedVisibility(
+        //         visible = showPoints,
+        //         enter = fadeIn(tween(200)) + scaleIn(),
+        //         exit = fadeOut(tween(400)),
+        //         modifier = Modifier
+        //             .align(Alignment.TopEnd)
+        //             .offset(y = animatedOffset.dp),
+        //     ) {
+        //         Text(
+        //             text = stringResource(R.string.quiz_points, pointValue),
+        //             color = Color(0xFF1B6B4A),
+        //             fontWeight = FontWeight.Bold,
+        //             fontSize = 18.sp,
+        //             modifier = Modifier.padding(end = 16.dp),
+        //         )
+        //     }
+        // }
     }
 }
 

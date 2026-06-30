@@ -2,37 +2,40 @@ package com.medtroniclabs.microcoaching.ui.learn.modules
 
 import com.medtroniclabs.microcoaching.ui.learn.LearnModule
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * Pins the Refresher / Knowledge / Training partition contract used by
- * [ModulesScreen]. The contract:
+ * [ModulesScreen].
  *
- *  - **Training** = `moduleType == "initial_training"` (always — completed
- *    initial-training modules still render here).
- *  - **Knowledge** = `moduleType == "digital_proficiency"` (always).
- *  - **Refresher** = unchanged "active drilling" rule —
- *    `(source != null OR moduleType == "refresher") AND wrongCount > 0
- *    AND status != "completed"`.
- *  - **Drop** = anything matching none of the above.
+ *  - **Training** = `moduleType == "initial_training"` OR `"digital_proficiency"`
+ *    (always — completed modules still render here).
+ *  - **Knowledge** = no longer a module partition (renders source documents now);
+ *    `sections.knowledge` is always empty.
+ *  - **Refresher** = **selector-authoritative**: `moduleType != "content_update"
+ *    AND fromMorningCard`. A module is a refresher iff the morning-card selector
+ *    emitted it (backend `/morning/cards` OR the on-device generator). There is NO
+ *    mastery/completion/source/wrong-count gating — a completed or fully-mastered
+ *    selector card still surfaces (it just sorts last), and a `fallback`-sourced
+ *    card qualifies just like a `gap` one. `content_update` never qualifies.
+ *  - **No section** = a non-selector, non-training module. This is a categorisation
+ *    outcome, NOT a "dropper": a selector card always lands in Refresher.
  *
- * The sections may **overlap** by design — see the "overlap" test below.
- * The only invariant the suite still pins is order preservation + no
- * duplicates *within* a section + no module is in a section it shouldn't be.
+ * Sections may **overlap** by design (a selector-surfaced `initial_training` module
+ * is in both Refresher and Training).
  *
- * If a contributor changes a predicate without updating the tests below,
- * the rule-level cases fail and force a conscious decision.
+ * If a contributor changes a predicate without updating the tests below, the
+ * rule-level cases fail and force a conscious decision.
  */
 class ModuleCategorizerTest {
 
     private fun module(
         family: String,
-        source: String? = null,
+        fromMorningCard: Boolean = false,
         status: String = "assigned",
-        wrongQuestionCount: Int? = null,
         moduleType: String = "initial_training",
+        source: String? = null,
     ): LearnModule = LearnModule(
         moduleFamilyId = family,
         title = "title-$family",
@@ -40,8 +43,8 @@ class ModuleCategorizerTest {
         clinicalDomain = "hypertension",
         status = status,
         source = source,
-        wrongQuestionCount = wrongQuestionCount,
         moduleType = moduleType,
+        fromMorningCard = fromMorningCard,
     )
 
     // ── Training rule (moduleType only) ───────────────────────────────────────
@@ -56,19 +59,15 @@ class ModuleCategorizerTest {
     }
 
     @Test
-    fun `Training keeps completed initial_training modules (previously Knowledge)`() {
-        // Spec change: the "completed wins → Knowledge" rule was removed.
-        // Completed initial-training stays in Training.
+    fun `Training keeps completed initial_training modules`() {
         val m = module("a", moduleType = "initial_training", status = "completed")
         val sections = ModuleCategorizer.categorize(listOf(m))
         assertEquals(listOf("a"), sections.training.map { it.moduleFamilyId })
         assertTrue(sections.knowledge.isEmpty())
     }
 
-    // ── Knowledge rule (moduleType only) ──────────────────────────────────────
-
     @Test
-    fun `Knowledge when moduleType is digital_proficiency regardless of status`() {
+    fun `digital_proficiency modules land in Training (Knowledge empty)`() {
         val rows = listOf(
             module("dp-assigned", moduleType = "digital_proficiency", status = "assigned"),
             module("dp-in-prog", moduleType = "digital_proficiency", status = "in_progress"),
@@ -77,162 +76,90 @@ class ModuleCategorizerTest {
         val sections = ModuleCategorizer.categorize(rows)
         assertEquals(
             listOf("dp-assigned", "dp-in-prog", "dp-completed"),
-            sections.knowledge.map { it.moduleFamilyId },
+            sections.training.map { it.moduleFamilyId },
         )
+        assertTrue(sections.knowledge.isEmpty())
+        assertTrue(sections.refreshers.isEmpty())
+    }
+
+    @Test
+    fun `Knowledge partition is always empty`() {
+        val rows = listOf(
+            module("a", moduleType = "initial_training", status = "completed"),
+            module("b", moduleType = "digital_proficiency", status = "assigned"),
+            module("c", moduleType = "content_update", status = "assigned"),
+        )
+        assertTrue(ModuleCategorizer.categorize(rows).knowledge.isEmpty())
+    }
+
+    // ── Refresher rule: selector-authoritative (fromMorningCard) ──────────────
+
+    @Test
+    fun `Refresher when the selector emitted it (fromMorningCard)`() {
+        val m = module("a", fromMorningCard = true, source = "gap", moduleType = "refresher")
+        assertEquals(listOf("a"), ModuleCategorizer.categorize(listOf(m)).refreshers.map { it.moduleFamilyId })
+    }
+
+    @Test
+    fun `Refresher includes a fallback-sourced selector card`() {
+        // A "fallback" morning card is a refresher just like a "gap" one — the old
+        // source == "gap"-only gate is gone.
+        val m = module("a", fromMorningCard = true, source = "fallback", moduleType = "refresher")
+        assertTrue(ModuleCategorizer.categorize(listOf(m)).refreshers.any { it.moduleFamilyId == "a" })
+    }
+
+    @Test
+    fun `Refresher includes a COMPLETED selector card (no completion drop)`() {
+        // Completion/mastery no longer hides a selector-provided module.
+        val m = module("a", fromMorningCard = true, source = "gap", status = "completed", moduleType = "refresher")
+        assertTrue(ModuleCategorizer.categorize(listOf(m)).refreshers.any { it.moduleFamilyId == "a" })
+    }
+
+    @Test
+    fun `NOT a refresher when no selector emitted it`() {
+        // Selector-only: a module the CHW may have gotten wrong locally but that no
+        // selector surfaced is not a refresher.
+        val m = module("a", fromMorningCard = false, source = null, status = "in_progress", moduleType = "refresher")
+        assertTrue(ModuleCategorizer.categorize(listOf(m)).refreshers.isEmpty())
+    }
+
+    @Test
+    fun `content_update is never a refresher even if the selector emitted it`() {
+        val m = module("a", fromMorningCard = true, source = "gap", moduleType = "content_update")
+        val sections = ModuleCategorizer.categorize(listOf(m))
+        assertTrue(sections.refreshers.isEmpty())
         assertTrue(sections.training.isEmpty())
-        assertTrue(sections.refreshers.isEmpty())
-    }
-
-    @Test
-    fun `Knowledge does NOT include completed initial_training anymore`() {
-        // Explicit pin: completed initial-training no longer falls into Knowledge.
-        val m = module("a", moduleType = "initial_training", status = "completed")
-        val sections = ModuleCategorizer.categorize(listOf(m))
-        assertFalse(sections.knowledge.any { it.moduleFamilyId == "a" })
-    }
-
-    // ── Refresher rule (unchanged from previous iteration) ────────────────────
-
-    @Test
-    fun `Refresher when morning-card-sourced with wrong questions and not completed`() {
-        val m = module(
-            family = "a",
-            source = "gap",
-            status = "in_progress",
-            wrongQuestionCount = 3,
-            moduleType = "initial_training",
-        )
-        val sections = ModuleCategorizer.categorize(listOf(m))
-        assertTrue(sections.refreshers.any { it.moduleFamilyId == "a" })
-    }
-
-    @Test
-    fun `Refresher when moduleType is refresher even without a morning-card source`() {
-        val m = module(
-            family = "a",
-            source = null,
-            status = "in_progress",
-            wrongQuestionCount = 3,
-            moduleType = "refresher",
-        )
-        val sections = ModuleCategorizer.categorize(listOf(m))
-        assertEquals(listOf("a"), sections.refreshers.map { it.moduleFamilyId })
-    }
-
-    @Test
-    fun `Refresher excludes when wrongQuestionCount is zero`() {
-        val m = module(
-            family = "a",
-            source = "gap",
-            status = "in_progress",
-            wrongQuestionCount = 0,
-            moduleType = "refresher",
-        )
-        val sections = ModuleCategorizer.categorize(listOf(m))
-        assertTrue(sections.refreshers.isEmpty())
-    }
-
-    @Test
-    fun `Refresher excludes completed modules`() {
-        val m = module(
-            family = "a",
-            source = "gap",
-            status = "completed",
-            wrongQuestionCount = 3,
-            moduleType = "refresher",
-        )
-        val sections = ModuleCategorizer.categorize(listOf(m))
-        assertTrue(sections.refreshers.isEmpty())
     }
 
     // ── Overlap — sections may share modules by design ────────────────────────
 
     @Test
-    fun `morning-card-sourced initial_training with wrong questions lands in BOTH Refresher and Training`() {
-        // Documented overlap: the Refresher row preserves "drill this today"
-        // prominence even when the underlying module is also a Training-type
-        // (initial_training). The same module appears in both lists.
-        val m = module(
-            family = "a",
-            source = "gap",
-            status = "in_progress",
-            wrongQuestionCount = 3,
-            moduleType = "initial_training",
-        )
+    fun `selector-surfaced initial_training lands in BOTH Refresher and Training`() {
+        val m = module("a", fromMorningCard = true, source = "gap", status = "in_progress", moduleType = "initial_training")
         val sections = ModuleCategorizer.categorize(listOf(m))
         assertEquals(listOf("a"), sections.refreshers.map { it.moduleFamilyId })
         assertEquals(listOf("a"), sections.training.map { it.moduleFamilyId })
         assertTrue(sections.knowledge.isEmpty())
     }
 
+    // ── No-section (categorisation outcome, not a dropper) ────────────────────
+
     @Test
-    fun `morning-card-sourced digital_proficiency with wrong questions lands in BOTH Refresher and Knowledge`() {
-        // Same overlap shape for digital_proficiency.
-        val m = module(
-            family = "a",
-            source = "fallback",
-            status = "in_progress",
-            wrongQuestionCount = 2,
-            moduleType = "digital_proficiency",
-        )
+    fun `non-selector non-training module has no section`() {
+        val m = module("a", fromMorningCard = false, moduleType = "refresher", status = "assigned")
         val sections = ModuleCategorizer.categorize(listOf(m))
-        assertEquals(listOf("a"), sections.refreshers.map { it.moduleFamilyId })
-        assertEquals(listOf("a"), sections.knowledge.map { it.moduleFamilyId })
-        assertTrue(sections.training.isEmpty())
-    }
-
-    // ── Drop rule (no section matches) ────────────────────────────────────────
-
-    @Test
-    fun `content_update modules are dropped (no section matches)`() {
-        // content_update isn't initial_training and isn't digital_proficiency.
-        // No morning-card source, so it's not a refresher either. → dropped.
-        val rows = listOf(
-            module("cu-assigned", moduleType = "content_update", status = "assigned"),
-            module("cu-completed", moduleType = "content_update", status = "completed"),
-            module(
-                "cu-in-prog",
-                moduleType = "content_update",
-                status = "in_progress",
-                wrongQuestionCount = 2,
-            ),
-        )
-        val sections = ModuleCategorizer.categorize(rows)
+        assertTrue(sections.refreshers.isEmpty())
         assertTrue(sections.training.isEmpty())
         assertTrue(sections.knowledge.isEmpty())
-        assertTrue(sections.refreshers.isEmpty())
     }
 
     @Test
-    fun `stale refresher-type with no source and zero wrong questions is dropped`() {
-        // Refresher requires wrongCount > 0; nothing else picks it up either.
-        val m = module(
-            family = "a",
-            source = null,
-            status = "assigned",
-            wrongQuestionCount = 0,
-            moduleType = "refresher",
-        )
+    fun `content_update with no selector card has no section`() {
+        val m = module("a", fromMorningCard = false, moduleType = "content_update", status = "in_progress")
         val sections = ModuleCategorizer.categorize(listOf(m))
         assertTrue(sections.refreshers.isEmpty())
-        assertTrue(sections.knowledge.isEmpty())
         assertTrue(sections.training.isEmpty())
-    }
-
-    @Test
-    fun `completed refresher-type module is dropped`() {
-        // Refresher excludes completed; refresher isn't initial_training or
-        // digital_proficiency → no home → dropped.
-        val m = module(
-            family = "a",
-            moduleType = "refresher",
-            status = "completed",
-            wrongQuestionCount = 0,
-        )
-        val sections = ModuleCategorizer.categorize(listOf(m))
-        assertTrue(sections.refreshers.isEmpty())
         assertTrue(sections.knowledge.isEmpty())
-        assertTrue(sections.training.isEmpty())
     }
 
     // ── Edge cases ────────────────────────────────────────────────────────────
@@ -252,35 +179,18 @@ class ModuleCategorizerTest {
         val catalogue = listOf(
             module("T-first", moduleType = "initial_training", status = "assigned"),
             module("K-first", moduleType = "digital_proficiency", status = "assigned"),
-            module(
-                "R-first",
-                moduleType = "refresher",
-                source = null,
-                status = "in_progress",
-                wrongQuestionCount = 2,
-            ),
-            module(
-                "T-second",
-                moduleType = "initial_training",
-                status = "in_progress",
-                wrongQuestionCount = 5,
-            ),
-            module(
-                "K-second",
-                moduleType = "digital_proficiency",
-                status = "completed",
-            ),
-            module(
-                "R-second",
-                source = "fallback",
-                moduleType = "refresher",
-                status = "in_progress",
-                wrongQuestionCount = 1,
-            ),
+            module("R-first", fromMorningCard = true, source = "gap", moduleType = "refresher", status = "in_progress"),
+            module("T-second", moduleType = "initial_training", status = "in_progress"),
+            module("K-second", moduleType = "digital_proficiency", status = "completed"),
+            module("R-second", fromMorningCard = true, source = "fallback", moduleType = "refresher", status = "in_progress"),
         )
         val sections = ModuleCategorizer.categorize(catalogue)
-        assertEquals(listOf("T-first", "T-second"), sections.training.map { it.moduleFamilyId })
-        assertEquals(listOf("K-first", "K-second"), sections.knowledge.map { it.moduleFamilyId })
+        // digital_proficiency (K-*) joins Training, interleaved in input order.
+        assertEquals(
+            listOf("T-first", "K-first", "T-second", "K-second"),
+            sections.training.map { it.moduleFamilyId },
+        )
+        assertTrue(sections.knowledge.isEmpty())
         assertEquals(listOf("R-first", "R-second"), sections.refreshers.map { it.moduleFamilyId })
     }
 }

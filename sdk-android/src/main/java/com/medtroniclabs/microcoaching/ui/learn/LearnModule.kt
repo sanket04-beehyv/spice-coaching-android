@@ -65,6 +65,32 @@ data class LearnModule(
      */
     val source: String? = null,
     /**
+     * True when the morning-card selector emitted this module — it has a row in
+     * `morning_card_cache` (backend `GET /morning/cards` OR the on-device
+     * [com.medtroniclabs.microcoaching.domain.gaps.ondevice.OnDeviceMorningGenerator]).
+     * This is the SOLE gate for refresher membership (see
+     * [com.medtroniclabs.microcoaching.ui.learn.modules.ModuleCategorizer]): if a
+     * selector surfaced it, it lands on the refresher list regardless of
+     * completion/mastery.
+     */
+    val fromMorningCard: Boolean = false,
+    /**
+     * Default severity of the behavioural gap that surfaced this module:
+     * "low" | "moderate" | "high" (from `behavioural_gap_cache.severity_default`).
+     * Resolved in [com.medtroniclabs.microcoaching.ui.learn.LearnViewModel.mapModules]
+     * via [behaviouralGapId]. Null when the module isn't gap-sourced — the
+     * refresher tile then shows no severity chip.
+     */
+    val severity: String? = null,
+    /**
+     * True when this module is surfaced by an **action/compliance gap** — a
+     * behavioural gap that carries a `detection_rule` and is driven by a
+     * real-world mistake (e.g. a wrong facility referral), not by quiz history.
+     * Such refreshers are exempt from the "all questions mastered → drop" filter
+     * so a fresh field mistake re-engages the CHW even after a past perfect quiz.
+     */
+    val isActionGap: Boolean = false,
+    /**
      * Raw `cards_json` from [ModuleEntity] — forwarded so [LessonPlayerScreen] and
      * [ModuleDetailScreen] can parse the card list without a DB round-trip.
      * Defaults to `"[]"` when not available (e.g. QuickLearn minimal mapping).
@@ -79,18 +105,29 @@ data class LearnModule(
      */
     val quizScorePct: Float? = null,
     /**
-     * Number of questions still "to reinforce" — i.e. either never answered or
-     * whose latest answer was wrong. Drives the count shown on the refresher tile
-     * in [RefresherList] and on the [MorningCard] / [LearnCard] banner.
+     * Number of questions whose **latest local attempt was wrong** — the CHW's
+     * "local gap". A never-attempted module reports 0 here (not the question
+     * total): the name means *answered wrong*, nothing else. Drives the
+     * Refresher-section membership in [com.medtroniclabs.microcoaching.ui.learn.modules.ModuleCategorizer].
      *
-     * Null when the count hasn't been computed yet (legacy callers or non-refresher
-     * paths). In that case, callers fall back to [inlineQuestions]?.size.
+     * NOTE: this is NOT the count to display on the tile — for that, use
+     * [reinforceQuestionCount] (the drill size, which also counts never-answered
+     * questions). See [LearnViewModel] mapModules for how the two are derived.
      *
-     * Recomputed on every [LearnViewModel.observeModules] emission, including
-     * after any `coaching_event` row change (so the tile updates immediately after
-     * the CHW completes a refresher).
+     * Null when the count hasn't been computed yet (legacy callers).
      */
     val wrongQuestionCount: Int? = null,
+    /**
+     * Number of questions still "to reinforce" — either never answered or whose
+     * latest answer was wrong. This equals the length of the refresher drill that
+     * [com.medtroniclabs.microcoaching.ui.learn.modules.QuickLearnViewModel.primeRefresherQuiz]
+     * presents, so it's the count shown on the refresher tile in [RefresherList].
+     *
+     * Null when not yet computed; callers fall back to [inlineQuestions]?.size.
+     * Recomputed on every [LearnViewModel.observeModules] emission (incl. after
+     * any `coaching_event` change) so the tile updates immediately.
+     */
+    val reinforceQuestionCount: Int? = null,
     /**
      * Number of distinct quiz questions the CHW has attempted at least once,
      * regardless of whether they got them right or wrong. Drives the training-card

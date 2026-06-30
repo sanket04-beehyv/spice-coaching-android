@@ -1,6 +1,10 @@
 package com.medtroniclabs.microcoaching.sync
 
 import android.content.Context
+import android.content.SharedPreferences
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 
 /**
  * Lightweight SharedPreferences wrapper for sync state.
@@ -22,6 +26,22 @@ class SyncPrefs(context: Context) {
     var lastInboundSyncAt: Long
         get() = prefs.getLong(KEY_LAST_INBOUND_SYNC_AT, 0L)
         set(value) = prefs.edit().putLong(KEY_LAST_INBOUND_SYNC_AT, value).apply()
+
+    /**
+     * Observe [lastInboundSyncAt] as a Flow that emits the current value
+     * immediately and again on every change — so a "last synced" UI label
+     * refreshes live the moment an inbound sync completes (without the screen
+     * needing to be reopened). Backed by a SharedPreferences change listener;
+     * the listener is unregistered when the collector is cancelled.
+     */
+    fun observeLastInboundSyncAt(): Flow<Long> = callbackFlow {
+        trySend(lastInboundSyncAt)
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == KEY_LAST_INBOUND_SYNC_AT) trySend(lastInboundSyncAt)
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
 
     /**
      * Epoch millis of the last **full-catalogue** modules reconcile. The normal
@@ -93,6 +113,20 @@ class SyncPrefs(context: Context) {
         get() = prefs.getInt(KEY_LAST_KNOWN_ROOM_VERSION, 0)
         set(value) = prefs.edit().putInt(KEY_LAST_KNOWN_ROOM_VERSION, value).apply()
 
+    /**
+     * Module family IDs the backend has terminally retired. Accumulated across sync
+     * pulls so [com.medtroniclabs.microcoaching.ai.retrieval.ModuleKnowledgeIndex.build]
+     * can exclude them even before Room deletion propagates to the index Flow.
+     */
+    var retiredFamilyIds: Set<String>
+        get() = prefs.getStringSet(KEY_RETIRED_FAMILY_IDS, emptySet()) ?: emptySet()
+        private set(value) = prefs.edit().putStringSet(KEY_RETIRED_FAMILY_IDS, value).apply()
+
+    fun addRetiredFamilyIds(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        retiredFamilyIds = retiredFamilyIds + ids
+    }
+
     fun reset() = prefs.edit().clear().apply()
 
     /**
@@ -105,6 +139,7 @@ class SyncPrefs(context: Context) {
         .remove(KEY_GAPS_WATERMARK)
         .remove(KEY_TRIGGERS_WATERMARK)
         .remove(KEY_CONFIG_WATERMARK)
+        .remove(KEY_RETIRED_FAMILY_IDS)
         .apply()
 
     companion object {
@@ -120,5 +155,6 @@ class SyncPrefs(context: Context) {
         private const val KEY_GAP_RESOLVE_THRESHOLD = "gap_resolve_threshold"
         private const val KEY_SOFT_TRIGGER_WRONG_COUNT = "soft_trigger_wrong_count_threshold"
         private const val KEY_LAST_KNOWN_ROOM_VERSION = "last_known_room_version"
+        private const val KEY_RETIRED_FAMILY_IDS = "retired_family_ids"
     }
 }

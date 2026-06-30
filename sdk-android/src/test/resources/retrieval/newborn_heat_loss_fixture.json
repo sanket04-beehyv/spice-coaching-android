@@ -1,0 +1,30 @@
+{
+  "id": "newborn_heat_loss",
+  "module_family_id": "3d554022-5b76-4f7b-9af6-8d148ca0af85",
+  "title_en": "Keeping the Newborn Warm",
+  "cards": [
+    {
+      "title_en": "Importance of Keeping Newborns Warm",
+      "body_en": "Newborns lose heat quickly because they have a large surface area and thin skin.",
+      "retrieval_hints_en": [
+        "why do newborns lose heat so quickly",
+        "why is it dangerous if baby is not dried and wrapped immediately"
+      ]
+    },
+    {
+      "title_en": "How to Keep Newborns Warm",
+      "body_en": "Dry the baby immediately and wrap with a warm cloth covering the head."
+    },
+    {
+      "title_en": "Re-warming a Cold Baby",
+      "body_en": "Skin-to-skin contact is the first step to re-warm a hypothermic newborn."
+    }
+  ],
+  "queries": [
+    {
+      "query": "The baby's head is uncovered in a cold room and the baby was not dried immediately. Why do newborns lose heat so quickly?",
+      "expected_card_index": 0,
+      "benchmark_ref": "Q44"
+    }
+  ]
+}

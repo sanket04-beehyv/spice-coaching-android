@@ -2,41 +2,73 @@ package com.medtroniclabs.microcoaching.ui.chat
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.medtroniclabs.microcoaching.Language
-import com.medtroniclabs.microcoaching.R
-import com.medtroniclabs.microcoaching.ui.SdkLocaleHelper
+import android.util.Log
+import com.medtroniclabs.microcoaching.data.db.dao.ModuleDao
+import com.medtroniclabs.microcoaching.data.db.entity.ModuleEntity
+import com.medtroniclabs.microcoaching.data.localized.readLocalized
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 
 /**
  * Backs the seed-suggestion chips above the chat input.
  *
- * Reads the curated `R.array.chat_seed_questions` resource — five hand-
- * picked clinical questions in EN + BN parallel — and shuffles the remaining
- * unused entries on every call. Tapping a chip persists its English text in
- * SharedPreferences so we don't re-offer the same prompt to the same CHW.
+ * **Source:** quiz questions from the locally cached `module_cache` table —
+ * the same content that drives the BM25 retrieval index, so every offered
+ * suggestion has a guaranteed answer (the matching quiz row is already
+ * indexed and will be retrieved as the top BM25 hit). This replaces the
+ * earlier curated `R.array.chat_seed_questions` list whose phrasing didn't
+ * always match what the model could answer.
  *
- * Once all five have been used the chip row stays empty until the prefs
- * file is cleared (typically app-data wipe). That's the strict reading of
- * "if a user used a suggestion we don't have to show it again" — easy to
- * relax later by adding a `resetIfAllUsed()` branch in [nextBatch].
+ * **Per-session picking:** [BATCH_SIZE] modules are sampled at random
+ * (each module contributes at most one suggestion), and one quiz question
+ * is sampled at random from each module's quiz. The CHW sees a fresh,
+ * diverse batch on every chat-sheet open.
+ *
+ * **De-dup:** tapped suggestions are persisted to SharedPreferences keyed on
+ * their English text. If we ever exhaust the unused pool the row goes empty
+ * — appropriate for the "user has seen everything once" terminal state.
  */
-internal class ChatSuggestionsRepository(private val appContext: Context) {
+internal class ChatSuggestionsRepository(
+    private val appContext: Context,
+    private val moduleDao: ModuleDao,
+) {
 
     private val prefs: SharedPreferences =
         appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    /** Loaded once per repo instance — the array is bundled, not network-fetched. */
-    private val allSuggestions: List<SuggestedQuestion> by lazy { loadAll() }
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /**
-     * Returns the unused-and-shuffled list. Caller renders all entries; the
-     * `SuggestionRow` composable already lives inside a `LazyRow`, so the
-     * full set (up to 5) is fine.
+     * Returns up to [BATCH_SIZE] quiz-question suggestions, each sourced from
+     * a different cached module. Already-tapped questions are filtered out.
+     * Empty list when the cache is empty, every cached module's quiz is empty,
+     * or every available question has been tapped this device session.
      */
-    fun nextBatch(): List<SuggestedQuestion> {
+    suspend fun nextBatch(): List<SuggestedQuestion> {
         val used = prefs.getStringSet(KEY_USED, emptySet()).orEmpty()
-        return allSuggestions
-            .filter { it.question !in used }
-            .shuffled()
+        val modules = runCatching { moduleDao.getAllOrderedOnce() }
+            .onFailure { Log.w(TAG, "moduleDao.getAllOrderedOnce threw: ${it.message}") }
+            .getOrDefault(emptyList())
+        if (modules.isEmpty()) {
+            Log.d(TAG, "nextBatch: no cached modules — empty suggestions")
+            return emptyList()
+        }
+        // Shuffle modules so a different set lands on every open. Pick a
+        // random question per module; stop once we've collected BATCH_SIZE
+        // unused suggestions.
+        val batch = mutableListOf<SuggestedQuestion>()
+        for (module in modules.shuffled()) {
+            if (batch.size >= BATCH_SIZE) break
+            val suggestion = pickRandomQuestion(module)
+                ?.takeIf { it.question.isNotBlank() && it.question !in used }
+                ?: continue
+            batch += suggestion
+        }
+        Log.d(TAG, "nextBatch: picked ${batch.size} from ${modules.size} cached modules (used=${used.size})")
+        return batch
     }
 
     /** Persists the English text of a tapped suggestion so it never re-appears. */
@@ -49,26 +81,44 @@ internal class ChatSuggestionsRepository(private val appContext: Context) {
             .apply()
     }
 
-    private fun loadAll(): List<SuggestedQuestion> {
-        // Load BOTH locales explicitly so a Bengali-mode SDK still has the
-        // English text on hand as the stable identifier (and vice versa).
-        // SdkLocaleHelper.wrap returns a Configuration-scoped Context so the
-        // resource lookup honours the requested locale regardless of system.
-        val enCtx = SdkLocaleHelper.wrap(appContext, Language.ENGLISH)
-        val bnCtx = SdkLocaleHelper.wrap(appContext, Language.BANGLA)
-        val en = enCtx.resources.getStringArray(R.array.chat_seed_questions)
-        val bn = bnCtx.resources.getStringArray(R.array.chat_seed_questions)
-        return en.mapIndexed { i, q ->
+    /**
+     * Parse the module's `quizJson` and return one random quiz row as a
+     * [SuggestedQuestion]. Null when the JSON can't be parsed, the array is
+     * empty, or no row has any usable question text.
+     */
+    private fun pickRandomQuestion(module: ModuleEntity): SuggestedQuestion? {
+        val arr = runCatching { json.parseToJsonElement(module.quizJson).jsonArray }
+            .getOrNull()
+            ?: return null
+        if (arr.isEmpty()) return null
+        // Convert every quiz row into a candidate suggestion, drop blanks,
+        // then pick one. Cheap — quiz arrays are ≤ 10 entries per module.
+        val candidates = arr.mapNotNull { el ->
+            val obj = el as? JsonObject ?: return@mapNotNull null
+            val question = obj.readLocalized("question")
+            val qEn = question.en
+            val qBn = question.bn
+            // English text is the stable identity used for de-dup. When the
+            // backend only ships Bangla, fall back to BN as both fields so
+            // markUsed still has something to key on.
+            val identity = qEn?.takeIf { it.isNotBlank() } ?: qBn?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
             SuggestedQuestion(
-                question = q,
-                banglaQuestion = bn.getOrNull(i) ?: q,
-                moduleFamilyId = null,
+                question = identity,
+                banglaQuestion = qBn.orEmpty(),
+                moduleFamilyId = module.moduleFamilyId,
             )
         }
+        return candidates.randomOrNull()
     }
 
+    private fun JsonObject.stringOrNull(key: String): String? =
+        (this[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+
     private companion object {
+        const val TAG = "ChatSuggestionsRepo"
         const val PREFS_NAME = "microcoaching_chat_suggestions"
         const val KEY_USED = "used_question_keys"
+        const val BATCH_SIZE = 3
     }
 }
