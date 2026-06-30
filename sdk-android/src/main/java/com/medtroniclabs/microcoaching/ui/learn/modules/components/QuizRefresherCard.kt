@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.medtroniclabs.microcoaching.R
+import com.medtroniclabs.microcoaching.ui.components.swipeToDismiss
 import com.medtroniclabs.microcoaching.ui.theme.SpiceBlue
 import com.medtroniclabs.microcoaching.ui.theme.SpiceBlueDark
 
@@ -40,6 +41,10 @@ import com.medtroniclabs.microcoaching.ui.theme.SpiceBlueDark
  * @param participantCount Placeholder count (backend endpoint deferred).
  * @param xpReward XP display label — display only.
  * @param onClick Open [RefresherBottomSheet].
+ * @param onDismiss Swiped away (arc gesture). The module stays in the Refresher
+ *   list and counts toward the home "Coaching" tile skip badge.
+ * @param dismissKey Identity of the shown question; resets the swipe offset when
+ *   the banner advances to a different module.
  */
 @Composable
 fun QuizRefresherCard(
@@ -47,12 +52,15 @@ fun QuizRefresherCard(
     participantCount: Int,
     xpReward: Int,
     onClick: () -> Unit,
+    onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    dismissKey: Any? = questionText,
 ) {
     Box(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
+            .swipeToDismiss(onDismiss = onDismiss, resetKey = dismissKey)
             .clip(RoundedCornerShape(20.dp))
             .background(Brush.linearGradient(listOf(SpiceBlue, SpiceBlueDark)))
             .clickable(onClick = onClick)
@@ -85,7 +93,8 @@ fun QuizRefresherCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RefresherPill(stringResource(R.string.quick_learn_tap_to_answer))
-                RefresherPill(stringResource(R.string.quick_learn_xp_reward, xpReward))
+                // Points/XP display temporarily disabled — UI only; [xpReward] + scoring logic retained.
+                // RefresherPill(stringResource(R.string.quick_learn_xp_reward, xpReward))
             }
         }
     }

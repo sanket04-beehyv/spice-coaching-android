@@ -18,21 +18,28 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.medtroniclabs.microcoaching.R
+import com.medtroniclabs.microcoaching.sync.SyncPrefs
 import com.medtroniclabs.microcoaching.ui.common.SdkScreenHeader
 import com.medtroniclabs.microcoaching.ui.learn.modules.ModulesScreen
 import com.medtroniclabs.microcoaching.ui.learn.modules.components.ModuleCard
 import com.medtroniclabs.microcoaching.ui.theme.MicroCoachingTheme
 import com.medtroniclabs.microcoaching.ui.theme.SurfaceBackground
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Entry screen for the Learn flow.
@@ -53,11 +60,15 @@ fun ModuleReadyScreen(
     onClose: (() -> Unit)? = null,
     chwId: String? = null,
     onRefresherStart: (LearnModule) -> Unit = {},
-    onKnowledgeSelect: (LearnModule) -> Unit = onModuleSelected,
-    onShowQuickLearn: (moduleFamilyId: String?) -> Unit = { _ -> },
-    onShowRefresherQuiz: () -> Unit = {},
+    onShowQuickLearn: (moduleFamilyId: String?, queueFamilyIds: List<String>) -> Unit = { _, _ -> },
+    onShowRefresherQuiz: (queueFamilyIds: List<String>) -> Unit = {},
     onRetrySync: () -> Unit = {},
     onSeeAllTraining: () -> Unit = {},
+    onSeeAllRefreshers: () -> Unit = {},
+    knowledgeDocuments: List<KnowledgeDocument> = emptyList(),
+    onKnowledgeDocSelect: (KnowledgeDocument) -> Unit = {},
+    onSeeAllKnowledge: () -> Unit = {},
+    cachedDocIds: Set<String> = emptySet(),
 ) {
     val lastModuleList = remember { mutableStateOf<List<LearnModule>?>(null) }
     if (uiState is LearnUiState.ModuleList) {
@@ -79,8 +90,22 @@ fun ModuleReadyScreen(
                     (uiState is LearnUiState.QuizInProgress || uiState is LearnUiState.QuizResult))
             )
         if (showHeader) {
+            // "Last synced …" reflects the last successful INBOUND sync (when the
+            // CHW's coaching content was last pulled from the backend) — outbound
+            // is telemetry going the other way and isn't what's shown here. Read
+            // as a Flow so the subtitle refreshes the moment a sync lands.
+            val context = LocalContext.current
+            val syncPrefs = remember(context) { SyncPrefs(context) }
+            val lastSyncedAt by remember(syncPrefs) { syncPrefs.observeLastInboundSyncAt() }
+                .collectAsState(initial = syncPrefs.lastInboundSyncAt)
+            val syncedSubtitle = if (lastSyncedAt <= 0L) {
+                stringResource(R.string.modules_last_synced_never)
+            } else {
+                stringResource(R.string.modules_last_synced, formatLastSynced(lastSyncedAt))
+            }
             SdkScreenHeader(
                 title = stringResource(R.string.modules_screen_title),
+                subtitle = syncedSubtitle,
                 onBack = onClose!!,
                 onHome = onClose,
             )
@@ -123,24 +148,23 @@ fun ModuleReadyScreen(
             // a fixed slot (no `when`-branch swap), Compose preserves its
             // subtree — child [QuickLearnViewModel] is reused, the slim top
             // progress bar fades in/out smoothly, no flicker on entry from
-            // SPICE's coaching tile.
-            val modulesList: List<LearnModule> = when (uiState) {
-                is LearnUiState.ModuleList -> uiState.modules
-                is LearnUiState.QuizInProgress, is LearnUiState.QuizResult ->
-                    lastModuleList.value ?: emptyList()
-                else -> emptyList()
-            }
+            // SPICE's coaching tile. The module lists themselves now come from
+            // the shared store inside [ModulesScreen]; uiState only drives the
+            // top loading bar here.
             val isLoading = uiState is LearnUiState.Loading
             ModulesScreen(
-                modules = modulesList,
                 chwId = chwId,
                 isLoading = isLoading,
                 onShowQuickLearn = onShowQuickLearn,
                 onShowRefresherQuiz = onShowRefresherQuiz,
                 onTrainingSelect = onModuleSelected,
-                onKnowledgeSelect = onKnowledgeSelect,
                 onRefresherStart = onRefresherStart,
                 onSeeAllTraining = onSeeAllTraining,
+                onSeeAllRefreshers = onSeeAllRefreshers,
+                knowledgeDocuments = knowledgeDocuments,
+                cachedDocIds = cachedDocIds,
+                onKnowledgeDocSelect = onKnowledgeDocSelect,
+                onSeeAllKnowledge = onSeeAllKnowledge,
             )
         } else {
             // Legacy non-SPICE host path — keeps the older spinner + flat list
@@ -172,6 +196,14 @@ fun ModuleReadyScreen(
         }
     }
 }
+
+/**
+ * Formats an inbound-sync epoch-millis timestamp into a compact, locale-aware
+ * "day month, HH:mm" label for the modules-screen header subtitle
+ * (e.g. "29 Jun, 14:30").
+ */
+private fun formatLastSynced(epochMillis: Long): String =
+    SimpleDateFormat("d MMM, HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
 // ── Internal list content ──────────────────────────────────────────────────────
 

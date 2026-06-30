@@ -8,9 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
  *
  * Implementations:
  *   - [GemmaService] — MediaPipe Gemma 3 1B INT4 (`.task` model file)
- *   - [LiteRtLmService] — LiteRT-LM Gemma 4 E2B (`.litertlm` model file)
  *
- * The correct implementation is selected at runtime by [InferenceRouter]
+ * The implementation is selected at runtime by [InferenceRouter]
  * based on the model file extension.
  */
 interface LLMService {
@@ -58,7 +57,7 @@ interface LLMService {
 
 /** Configuration for loading and running an LLM. */
 data class LLMConfiguration(
-    /** Absolute path to the model file (.task or .litertlm). */
+    /** Absolute path to the model file (.task). */
     val modelPath: String,
     /** Maximum number of tokens to generate per response. */
     val maxTokens: Int = 1024,

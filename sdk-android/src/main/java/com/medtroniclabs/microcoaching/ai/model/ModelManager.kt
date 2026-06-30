@@ -31,7 +31,7 @@ import java.security.MessageDigest
  * and respects [MicroCoachingConfig.wifiOnlyModelDownload].
  *
  * Provider fallback order is driven by [MicroCoachingConfig.modelProviders].
- * Default: Backend → HuggingFace.
+ * Default: Backend → HuggingFace → Kaggle (stub).
  *
  * SHA-256 verification is run after every download to detect corrupted files.
  *
@@ -99,11 +99,11 @@ class ModelManager(private val config: MicroCoachingConfig) {
                 //   (b) a partial download still in flight from a background worker.
                 //
                 // Distinguish by size: only adopt if the file is plausibly complete
-                // (≥ MIN_VALID_MODEL_SIZE_BYTES). Otherwise leave state at Idle and
-                // let WorkManager finish the job — the SUCCEEDED branch will persist
+                // (≥ the selected variant's size floor). Otherwise leave state at Idle
+                // and let WorkManager finish the job — the SUCCEEDED branch will persist
                 // the flag when the worker truly completes.
                 val sizeMb = file.length() / 1_048_576
-                if (file.length() >= MIN_VALID_MODEL_SIZE_BYTES) {
+                if (file.length() >= minValidModelSizeBytes()) {
                     Log.i(TAG, "Reconcile: file present ($sizeMb MB) without flag — adopting → ${file.absolutePath}")
                     persistReadyFlag(file)
                     _state.value = ModelState.Ready(file)
@@ -126,11 +126,23 @@ class ModelManager(private val config: MicroCoachingConfig) {
         prefs.edit().remove(KEY_MODEL_READY).remove(KEY_MODEL_PATH).apply()
     }
 
-    /** Returns the first model file found in app-internal storage, or null. */
+    /**
+     * Returns the on-disk file for the **selected** model variant, or null.
+     *
+     * Matches the selected variant's exact [ModelVariant.fileName] (not "first
+     * `.task` on disk") so multiple variants can coexist during A/B testing and
+     * switching the selection is deterministic.
+     */
     fun findLocalModel(): File? {
-        val dir = config.context.filesDir ?: return null
-        return dir.listFiles()?.firstOrNull { it.extension == "task" || it.extension == "litertlm" }
+        val dir = config.context.getExternalFilesDir(null) ?: return null
+        val expected = config.selectedModelVariant().fileName
+        return dir.listFiles()?.firstOrNull { it.name == expected }
     }
+
+    /** Per-variant lower bound for "this download is complete" — replaces the old
+     *  global 750 MB floor that was tuned only for the 1B. */
+    private fun minValidModelSizeBytes(): Long =
+        ModelCatalog.minValidSizeBytes(config.selectedModelVariant())
 
     /** Returns true if a model file is present on device (regardless of integrity). */
     fun isModelPresent(): Boolean = findLocalModel() != null
@@ -274,23 +286,19 @@ class ModelManager(private val config: MicroCoachingConfig) {
                 workDataOf(
                     ModelDownloadWorker.KEY_PROVIDERS to providerKeys,
                     ModelDownloadWorker.KEY_BACKEND_URL to config.backendUrl,
+                    ModelDownloadWorker.KEY_AUTH_TOKEN to config.authToken,
+                    ModelDownloadWorker.KEY_HF_TOKEN to config.huggingFaceToken,
                     ModelDownloadWorker.KEY_HF_URL to config.huggingFaceModelUrl,
+                    ModelDownloadWorker.KEY_MODEL_ID to config.selectedModelId,
                 )
             )
             .addTag(DOWNLOAD_TAG)
             .build()
 
-        _state.value = ModelState.Downloading(progressPercent = 0)
-        scope.launch(Dispatchers.IO) {
-            ModelDownloadSecrets.persist(
-                context = config.context,
-                authToken = config.authToken,
-                hfToken = config.huggingFaceToken,
-            )
-            WorkManager.getInstance(config.context)
-                .enqueueUniqueWork(UNIQUE_WORK_NAME, ExistingWorkPolicy.REPLACE, workRequest)
-        }
+        WorkManager.getInstance(config.context)
+            .enqueueUniqueWork(UNIQUE_WORK_NAME, ExistingWorkPolicy.REPLACE, workRequest)
 
+        _state.value = ModelState.Downloading(progressPercent = 0)
         Log.i(
             TAG,
             "Model download scheduled — providers=${config.modelProviders.map { it::class.simpleName }}, " +
@@ -400,10 +408,10 @@ class ModelManager(private val config: MicroCoachingConfig) {
      * (file still flushing, momentary I/O denial, fresh download race). Now the
      * decision is gated on a size heuristic:
      *
-     *   - file size < [MIN_VALID_MODEL_SIZE_BYTES] → the file is definitely truncated;
+     *   - file size < the variant size floor → the file is definitely truncated;
      *     delete it, clear the prefs flag, and surface [ModelState.LoadFailed] so the
      *     UI re-prompts for a download.
-     *   - file size ≥ [MIN_VALID_MODEL_SIZE_BYTES] → the file looks structurally complete;
+     *   - file size ≥ the variant size floor → the file looks structurally complete;
      *     keep it on disk and surface [ModelState.LoadFailed] with a retry CTA. The
      *     prefs flag is left untouched so reconciliation on next launch can still
      *     try the engine again.
@@ -434,7 +442,7 @@ class ModelManager(private val config: MicroCoachingConfig) {
         val file = findLocalModel()
         if (file != null) {
             val sizeMb = file.length() / 1_048_576
-            if (file.length() < MIN_VALID_MODEL_SIZE_BYTES) {
+            if (file.length() < minValidModelSizeBytes()) {
                 if (file.delete()) {
                     Log.w(TAG, "Deleted truncated model file ($sizeMb MB < min): ${file.name}")
                 }
@@ -533,9 +541,9 @@ class ModelManager(private val config: MicroCoachingConfig) {
         const val DOWNLOAD_TAG = "microcoaching_model_download"
         const val UNIQUE_WORK_NAME = "microcoaching_model_download"
 
-        // Mirrors ModelDownloadWorker.MIN_VALID_MODEL_SIZE_BYTES — Gemma 3 1B INT4 is ~900 MB,
-        // anything below 750 MB is definitely a truncated download.
-        private const val MIN_VALID_MODEL_SIZE_BYTES = 750L * 1024 * 1024
+        // Per-variant completeness floor now lives in ModelCatalog.minValidSizeBytes()
+        // (see minValidModelSizeBytes()) — the old global 750 MB constant was tuned
+        // for the 1B and wrongly rejected the ~250–300 MB 270M variants.
 
         private const val PREFS_NAME = "microcoaching_model_prefs"
         private const val KEY_MODEL_READY = "model_ready"

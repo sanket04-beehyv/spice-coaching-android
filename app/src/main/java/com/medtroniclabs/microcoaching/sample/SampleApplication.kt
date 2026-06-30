@@ -4,6 +4,7 @@ import android.app.Application
 import com.medtroniclabs.microcoaching.Language
 import com.medtroniclabs.microcoaching.MicroCoachingSDK
 import com.medtroniclabs.microcoaching.ModelDownloadStrategy
+import com.medtroniclabs.microcoaching.ai.model.ModelCatalog
 import com.medtroniclabs.microcoaching.ai.model.ModelProvider
 
 /**
@@ -18,13 +19,12 @@ import com.medtroniclabs.microcoaching.ai.model.ModelProvider
  *
  * To pre-place a model for testing without downloading:
  * ```bash
- * adb push your_model.task /data/local/tmp/model.task
- * adb shell run-as com.medtroniclabs.microcoaching.sample \
- *   cp /data/local/tmp/model.task files/
+ * adb push your_model.task \
+ *   /sdcard/Android/data/com.medtroniclabs.microcoaching.sample/files/
  * ```
  *
  * ## OTel
- * Logcat debug logging is enabled in debug builds only.
+ * Logcat debug logging is enabled in debug builds so spans are visible without an external collector.
  * To also export to a real SigNoz / Grafana / Jaeger instance, set OTEL_ENDPOINT and
  * OTEL_TOKEN in local.properties (see local.properties.example).
  *
@@ -40,18 +40,23 @@ class SampleApplication : Application() {
     }
 
     private fun initMicroCoachingSDK() {
-        // Detect any existing model file — use it directly and skip the download step.
-        // Falls back to ON_FIRST_USE (HuggingFace download) if no file is found.
-        val modelDir = filesDir
+        // Which on-device model to run. Default is Gemma 3 270M (q8) — see ModelCatalog.
+        val selectedModelId = ModelCatalog.DEFAULT_ID
+        val selectedVariant = ModelCatalog.resolve(selectedModelId)
+
+        // Detect an existing file for the SELECTED variant only — use it directly and
+        // skip the download. Matching the exact filename (not "first .task") prevents a
+        // stale model from a previous variant being loaded as if it were the selected one.
+        val modelDir = getExternalFilesDir(null)
         val existingModel = modelDir?.listFiles()
-            ?.firstOrNull { it.extension == "task" || it.extension == "litertlm" }
+            ?.firstOrNull { it.name == selectedVariant.fileName }
         val downloadStrategy = if (existingModel != null) {
             ModelDownloadStrategy.PROVIDED
         } else {
             ModelDownloadStrategy.ON_FIRST_USE
         }
 
-        // OTel: real endpoint if OTEL_ENDPOINT is set in local.properties.
+        // OTel: real endpoint if OTEL_ENDPOINT is set in local.properties; Logcat on in debug.
         val otelEndpoint = BuildConfig.OTEL_ENDPOINT
         val otelHeaders = if (BuildConfig.OTEL_TOKEN.isNotBlank()) {
             mapOf("Authorization" to "Bearer ${BuildConfig.OTEL_TOKEN}")
@@ -71,6 +76,7 @@ class SampleApplication : Application() {
             .otelServiceName("micro-coaching-sample")
             .enableOtelDebugLogging(BuildConfig.DEBUG)
             // Model
+            .selectedModel(selectedModelId)
             .modelDownloadStrategy(downloadStrategy)
             .modelProviders(listOf(ModelProvider.HuggingFace))
             .modelPath(existingModel?.absolutePath ?: "")

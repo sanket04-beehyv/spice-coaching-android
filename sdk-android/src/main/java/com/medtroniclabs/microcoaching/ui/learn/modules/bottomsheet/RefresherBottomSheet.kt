@@ -7,10 +7,16 @@ import android.view.View
 import android.view.ViewGroup
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentManager
 import androidx.lifecycle.ViewModelProvider
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
@@ -27,13 +33,16 @@ import kotlinx.coroutines.launch
  *
  * Supports two entry modes controlled by [EntryMode]:
  *
- * - [EntryMode.QUESTION_FIRST] (default, from [QuizRefresherCard] on modules screen):
- *   1 quiz question → lesson cards in sequence → Done / "Next Refresher"
+ * - [EntryMode.CARDS_FIRST] (default): **every** refresher entry point — the home
+ *   `MorningCard`, the modules-screen `QuizRefresherCard` banner, and the
+ *   `RefresherList`. Lesson cards → quiz questions → Done (the list/banner flows
+ *   then offer "Next Refresher"; the home card does not).
  *
- * - [EntryMode.CARDS_FIRST] (from [MorningCard] on home screen):
- *   lesson cards in sequence → 1 quiz question → Done (no "Next Refresher")
+ * - [EntryMode.QUESTION_FIRST] (quiz-first): retained as an explicit opt-in for a
+ *   future quiz-first flow; no caller uses it today.
  *
- * The [fromHomeScreen] flag suppresses the "Next Refresher" CTA when true.
+ * The [fromHomeScreen] flag (true only for the home `MorningCard`) suppresses the
+ * "Next Refresher" CTA and drives the morning-card dismiss on completion.
  */
 class RefresherBottomSheet : BottomSheetDialogFragment() {
 
@@ -57,9 +66,10 @@ class RefresherBottomSheet : BottomSheetDialogFragment() {
     ): View {
         val chwId = arguments?.getString(ARG_CHW_ID) ?: CoachingFlowActivity.FALLBACK_CHW_ID
         val fromHomeScreen = arguments?.getBoolean(ARG_FROM_HOME_SCREEN, false) ?: false
-        val entryModeName = arguments?.getString(ARG_ENTRY_MODE) ?: EntryMode.QUESTION_FIRST.name
+        val entryModeName = arguments?.getString(ARG_ENTRY_MODE) ?: EntryMode.CARDS_FIRST.name
         val entryMode = EntryMode.valueOf(entryModeName)
         val targetModuleFamilyId = arguments?.getString(ARG_TARGET_MODULE_FAMILY_ID)
+        val queueFamilyIds = arguments?.getStringArrayList(ARG_QUEUE_FAMILY_IDS).orEmpty()
 
         val viewModel = ViewModelProvider(
             this,
@@ -70,14 +80,26 @@ class RefresherBottomSheet : BottomSheetDialogFragment() {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 SdkLocalizedTheme {
-                    RefresherContent(
-                        viewModel = viewModel,
-                        fromHomeScreen = fromHomeScreen,
-                        entryMode = entryMode,
-                        targetModuleFamilyId = targetModuleFamilyId,
-                        onDismiss = { dismissAllowingStateLoss() },
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    // White sheet surface (rounded top to match the dialog),
+                    // overriding the Material bottom-sheet default tint. Quiz
+                    // options inside use a soft surface tint so they read against
+                    // this white background.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                            .background(Color.White),
+                    ) {
+                        RefresherContent(
+                            viewModel = viewModel,
+                            fromHomeScreen = fromHomeScreen,
+                            entryMode = entryMode,
+                            targetModuleFamilyId = targetModuleFamilyId,
+                            onDismiss = { dismissAllowingStateLoss() },
+                            modifier = Modifier.fillMaxSize(),
+                            queueFamilyIds = queueFamilyIds,
+                        )
+                    }
                 }
             }
         }
@@ -116,13 +138,21 @@ class RefresherBottomSheet : BottomSheetDialogFragment() {
         private const val ARG_FROM_HOME_SCREEN = "from_home_screen"
         private const val ARG_ENTRY_MODE = "entry_mode"
         private const val ARG_TARGET_MODULE_FAMILY_ID = "target_module_family_id"
+        private const val ARG_QUEUE_FAMILY_IDS = "queue_family_ids"
 
+        /**
+         * @param queueFamilyIds the validated refresher ordering currently visible
+         *   on the modules screen (banner + list). The sheet chains "Next refresher"
+         *   only through these, so the sheet's queue matches what the CHW saw.
+         *   Empty for the home-screen flow (falls back to the full morning set).
+         */
         fun show(
             fm: FragmentManager,
             chwId: String = MicroCoachingSDK.getInstance().currentCHWId ?: "",
             fromHomeScreen: Boolean = false,
-            entryMode: EntryMode = EntryMode.QUESTION_FIRST,
+            entryMode: EntryMode = EntryMode.CARDS_FIRST,
             targetModuleFamilyId: String? = null,
+            queueFamilyIds: List<String> = emptyList(),
         ): String {
             val sheet = RefresherBottomSheet().apply {
                 arguments = Bundle().apply {
@@ -130,6 +160,9 @@ class RefresherBottomSheet : BottomSheetDialogFragment() {
                     putBoolean(ARG_FROM_HOME_SCREEN, fromHomeScreen)
                     putString(ARG_ENTRY_MODE, entryMode.name)
                     targetModuleFamilyId?.let { putString(ARG_TARGET_MODULE_FAMILY_ID, it) }
+                    if (queueFamilyIds.isNotEmpty()) {
+                        putStringArrayList(ARG_QUEUE_FAMILY_IDS, ArrayList(queueFamilyIds))
+                    }
                 }
             }
             sheet.show(fm, TAG)

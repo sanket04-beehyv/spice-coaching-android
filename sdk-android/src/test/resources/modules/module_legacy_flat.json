@@ -1,0 +1,40 @@
+{
+  "id": "02eca207-0546-4190-81e2-4dcd03800572",
+  "module_family_id": "499cb956-2928-42de-a139-857785a75452",
+  "version": 14,
+  "title_bn": "নিওনেটাল সেপসিস বোঝা",
+  "title_en": "Management of Neonatal Sepsis",
+  "description_bn": "এই মডিউলে CHW রা নবজাতক সেপসিস পরিচালনা শিখবেন।",
+  "description_en": "In this module, CHWs will learn how to manage neonatal sepsis.",
+  "domain": "rmnch",
+  "module_type": "initial_training",
+  "estimated_minutes": 10,
+  "difficulty_level": "moderate",
+  "clinically_reviewed": true,
+  "updated_at": "2026-06-19T02:23:45.019545Z",
+  "cards": [
+    {
+      "title_bn": "নিওনেটাল সেপসিস বোঝা",
+      "title_en": "Understanding Neonatal Sepsis",
+      "body_bn": [{"type": "paragraph", "content": [{"text": "সেপসিস মানে সংক্রমণ।", "type": "text"}]}],
+      "body_en": [{"type": "paragraph", "content": [{"text": "Sepsis means infection.", "type": "text"}]}]
+    }
+  ],
+  "quiz": [
+    {
+      "id": "q-legacy-1",
+      "question_bn": "প্রশ্ন",
+      "question_en": "Question",
+      "options_bn": ["এ", "বি"],
+      "options_en": ["A", "B"],
+      "correct_indices": [0],
+      "explanation_bn": "ব্যাখ্যা",
+      "difficulty": "moderate"
+    }
+  ],
+  "search_metadata": {
+    "keywords_en": ["neonatal sepsis"],
+    "keywords_bn": ["নিওনেটাল সেপসিস"],
+    "search_phrases_en": ["What are the signs of neonatal sepsis?"]
+  }
+}

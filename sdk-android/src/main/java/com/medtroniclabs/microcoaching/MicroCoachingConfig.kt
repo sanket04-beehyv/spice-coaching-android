@@ -1,7 +1,9 @@
 package com.medtroniclabs.microcoaching
 
 import android.content.Context
+import com.medtroniclabs.microcoaching.ai.model.ModelCatalog
 import com.medtroniclabs.microcoaching.ai.model.ModelProvider
+import com.medtroniclabs.microcoaching.ai.model.ModelVariant
 import com.medtroniclabs.microcoaching.domain.decision.CoachingMode
 import com.medtroniclabs.microcoaching.sdk.MicroCoachingDataCallback
 
@@ -74,9 +76,7 @@ data class MicroCoachingConfig internal constructor(
     /**
      * Absolute path to a pre-provisioned model file.
      * Used when [modelDownloadStrategy] is [ModelDownloadStrategy.PROVIDED].
-     * Extension determines which engine is used:
-     *   `.task`     → MediaPipe Gemma 3 1B via [GemmaService]
-     *   `.litertlm` → LiteRT-LM Gemma 4 E2B via [LiteRtLmService]
+     * Must be a `.task` file → MediaPipe Gemma 3 1B via [GemmaService].
      */
     val modelPath: String = "",
     /** Controls when the on-device model is downloaded. */
@@ -103,7 +103,7 @@ data class MicroCoachingConfig internal constructor(
     /**
      * Ordered list of providers tried when downloading the model.
      * The SDK moves to the next provider if the current one fails.
-     * Default: Backend → HuggingFace
+     * Default: Backend → HuggingFace → Kaggle
      *
      * Override to change priority or disable a provider:
      * ```kotlin
@@ -120,16 +120,45 @@ data class MicroCoachingConfig internal constructor(
      */
     val huggingFaceToken: String = "",
     /**
-     * Direct download URL for the HuggingFace model file.
-     * Default: Gemma3-1B-IT INT4 in LiteRT format (~1.1 GB).
-     * Override to target a different model revision or format.
+     * Which model the SDK downloads and loads — an `id` from
+     * [com.medtroniclabs.microcoaching.ai.model.ModelCatalog.ALLOWLIST].
+     * Default: [com.medtroniclabs.microcoaching.ai.model.ModelCatalog.DEFAULT_ID]
+     * (Gemma 3 270M q8 `.task`). The selected variant is the single source of truth
+     * for download URL, on-disk filename, expected size, and runtime — see
+     * [selectedModelVariant].
+     *
+     * The global ≥ 3 GB RAM gate still applies; a 270M variant's lower
+     * `minDeviceMemoryGb` is not yet enforced below that cut-off.
      */
-    val huggingFaceModelUrl: String = ModelProvider.DEFAULT_HF_MODEL_URL,
+    val selectedModelId: String = ModelCatalog.DEFAULT_ID,
+    /**
+     * **Optional** direct download URL override for the HuggingFace model file.
+     * Blank (default) → use [selectedModelVariant]'s `downloadUrl` from the catalog.
+     * Set this only to point at a model file not in the allowlist (the on-disk
+     * filename still comes from the selected variant).
+     */
+    val huggingFaceModelUrl: String = "",
 
-    /** Maximum tokens the LLM generates per response. */
-    val maxInferenceTokens: Int = 512,
-    /** LLM sampling temperature. Higher = more creative; lower = more deterministic. */
-    val inferenceTemperature: Float = 0.6f,
+    /**
+     * TOTAL token window for an inference session — **input prompt + generated
+     * output combined**, not an output cap (MediaPipe's `setMaxTokens` sizes the
+     * KV cache). The grounded chat prompt (system rules + reference cards +
+     * history) alone runs ~450–550 tokens; the previous 512 default left ~15–40
+     * tokens for the answer, which is why replies were cut off mid-sentence
+     * (`sawEndOfTurn=false` in ChatTrace). 1536 fits the full prompt budget
+     * (`ChatSession.MAX_PROMPT_CHARS`) plus a complete 2–4 sentence answer with
+     * headroom; KV-cache cost at this length is comfortably within the 3 GB-RAM
+     * device floor for Gemma 3 1B INT4.
+     */
+    val maxInferenceTokens: Int = 1536,
+    /**
+     * LLM sampling temperature. The chat's grounded mode is an *extractive
+     * rephrasing* task — low temperature keeps the model close to the reference
+     * text and makes repeated identical questions produce near-identical answers
+     * (the 0.6 default was the main source of "same question, different answer"
+     * reports). Raise only if responses feel robotic.
+     */
+    val inferenceTemperature: Float = 0.3f,
     /**
      * Controls how strictly the chat refuses out-of-corpus questions.
      *
@@ -142,6 +171,30 @@ data class MicroCoachingConfig internal constructor(
      * behaviour (L1 keyword miss or L2 retrieval miss → canned refusal).
      */
     val chatScopeStrictness: ChatScopeStrictness = ChatScopeStrictness.ExtendedClinical,
+
+    /**
+     * Tunable thresholds for the offline-chat pipeline — the BM25 retrieval gate
+     * and the post-LLM-stream refusal gates. Defaults preserve current behaviour
+     * except the groundedness floor (lowered) and stream cap (raised); see
+     * [ChatTuning] for the rationale of each knob. Set via
+     * `MicroCoachingSDK.Builder.chatTuning(...)`.
+     *
+     * Why this exists: on a 270M model the retrieval is usually excellent (the
+     * right card scores high) but the model disregards the references and
+     * hallucinates, so the old fixed 0.25 groundedness floor hard-refused
+     * answerable questions ("I don't have this in my training material"). These
+     * knobs let a confident BM25 match show the model's answer, with the narrow
+     * drug/dosage guards kept on as the only hard safety net.
+     */
+    val chatTuning: ChatTuning = ChatTuning(),
+
+    /**
+     * Refresher behaviour: the per-source toggles (quiz/gap/referral/visit) and the
+     * (now no-op) legacy question-sampling fields — see [RefresherTuning]. A refresher
+     * presents its full to-reinforce set. Set via
+     * `MicroCoachingSDK.Builder.refresherTuning(...)`.
+     */
+    val refresherTuning: RefresherTuning = RefresherTuning(),
 
     /**
      * Overrides the SDK's automatic low-end-device detection (`< 3 GB total RAM`,
@@ -159,6 +212,13 @@ data class MicroCoachingConfig internal constructor(
     // ── Feature Flags ─────────────────────────────────────────────────────────
     /** Enable the AI chat fragment (UC-2 entry point). */
     val enableChat: Boolean = true,
+    /**
+     * When `true`, merge per-card `retrieval_hints_*` from APK assets
+     * (`assets/retrieval/overlays/`) into synced modules before building the
+     * chat knowledge index. **Benchmark / QA only** — use to validate hint
+     * consumption before the backend ships v2 metadata on sync cards.
+     */
+    val enableRetrievalHintFixtureOverlay: Boolean = false,
     /** Enable Bengali voice input/output (Phase 6 — disabled by default). */
     val enableVoice: Boolean = false,
     /** Enable micro-learning module UC-1 (Phase 3 — disabled by default). */
@@ -229,6 +289,105 @@ data class MicroCoachingConfig internal constructor(
      * Leave null (default) in production.
      */
     val forcedMode: CoachingMode? = null,
+) {
+    /**
+     * The resolved on-device model for this config. Falls back to
+     * [ModelCatalog.default] for an unknown [selectedModelId]. Single source of
+     * truth for download URL, on-disk filename, expected size, runtime, and
+     * sampling overrides.
+     */
+    fun selectedModelVariant(): ModelVariant = ModelCatalog.resolve(selectedModelId)
+}
+
+/**
+ * Tunable thresholds for the capable-device offline-chat pipeline. Every value is
+ * a single knob the host can move without an SDK code change; the defaults are the
+ * SDK's recommended starting point.
+ *
+ * The pipeline retrieves grounding cards via BM25, streams an answer from the
+ * on-device model, then runs a series of gates. On a small model (Gemma 3 270M) the
+ * dominant failure is the model *ignoring* excellent retrieval and answering from
+ * pre-training. The groundedness gate (L3c) always runs, with a **two-tier floor**:
+ * when BM25 retrieval is confident the answer only has to clear a lenient floor;
+ * when retrieval is weak it must clear a stricter floor.
+ *
+ * Crucially, failing the groundedness floor (or the L4 validator) **does not refuse**
+ * — because BM25 already selected relevant cards, the gate falls back to serving the
+ * clinician-authored card body / quiz explanation (the BM25 result) with a source
+ * chip. So the floors can be set strict: a model answer that doesn't faithfully cover
+ * the references is replaced by the authoritative card content rather than shown. The
+ * drug/dosage-fabrication guards remain a hard safety net regardless.
+ *
+ * Observed groundedness scores (from `groundedness=` ChatTrace lines): a fluent
+ * answer that ignores the references scores ~0.05–0.10; an honest paraphrase of the
+ * reference facts scores ~0.5–0.9. Tune the floors between those bands.
+ *
+ * @property bm25ScoreThreshold Minimum field-weighted BM25 score for a chunk to be
+ *           retrieved at all (the L2 gate). Lower = more recall, more marginal hits.
+ * @property strongRetrievalScore Top-chunk BM25 score at/above which retrieval is
+ *           treated as *confident*, selecting [strongRetrievalGroundednessFloor]
+ *           instead of [groundednessFloor]. BM25 scores are not normalised (field
+ *           weights push real matches to ~10–65); tune from the `topScore=` line.
+ * @property groundednessFloor Groundedness floor (0..1) applied when retrieval is
+ *           **NOT** confident. Stricter of the two. Below it the answer is replaced by
+ *           the BM25 card content (not refused), so it can sit high. Lower it toward
+ *           0.2 to let more of the model's own wording through.
+ * @property strongRetrievalGroundednessFloor Groundedness floor (0..1) applied when
+ *           retrieval **IS** confident ([strongRetrievalScore]+). Below it the answer
+ *           is replaced by the BM25 card content. Set equal to [groundednessFloor]
+ *           for a single uniform floor; set to 0 to always show the model's answer on
+ *           strong retrieval.
+ * @property streamCapChars Hard cap on streamed response length before generation is
+ *           aborted. Raised from 700 so a complete 2–4 sentence answer isn't cut
+ *           mid-sentence (the verified breastfeeding-counselling truncation).
+ * @property maxResponseWords L4 length cap; responses longer than this are rejected
+ *           as a free-styling signal and routed to the card-body fallback.
+ * @property enableDosageGuard When true, an answer that introduces a number-adjacent
+ *           dosage ("5 mg", "2 tablets") not present in the references is rejected.
+ *           The one clinical-safety guard that should normally stay on.
+ * @property enableDrugGuard When true, an answer that names a drug not present in the
+ *           references is rejected. Keep on for safety.
+ */
+data class ChatTuning(
+    val bm25ScoreThreshold: Float = 1.5f,
+    val strongRetrievalScore: Float = 6.0f,
+    val groundednessFloor: Float = 0.35f,
+    val strongRetrievalGroundednessFloor: Float = 0.25f,
+    val streamCapChars: Int = 1100,
+    val maxResponseWords: Int = 280,
+    val enableDosageGuard: Boolean = true,
+    val enableDrugGuard: Boolean = true,
+)
+
+/**
+ * Refresher tunables.
+ *
+ * **Note:** the quiz-subset "nudge" ([questionSampleRatio]/[minQuestionsPerRefresher]/
+ * [maxQuestionsPerRefresher]) is **no longer applied** — a refresher now presents its
+ * **full to-reinforce set** (every question still unanswered-correctly) so it can be
+ * completed and disappears once answered, instead of looping on a fixed subset. The
+ * three sample fields are retained for source/binary compatibility but have no effect.
+ */
+data class RefresherTuning(
+    @Deprecated("No effect — refreshers present the full to-reinforce set, not a sampled subset.")
+    val questionSampleRatio: Float = 0.4f,
+    @Deprecated("No effect — see questionSampleRatio.")
+    val minQuestionsPerRefresher: Int = 2,
+    @Deprecated("No effect — see questionSampleRatio.")
+    val maxQuestionsPerRefresher: Int = 6,
+
+    // ── On-device morning-card sources (per-source, independently toggleable) ──
+    // The backend's current default is quiz-level only; the other three are kept
+    // implemented but off, ready to re-enable by flipping a single flag.
+
+    /** Quiz-level refreshers (`chw_quiz_question_state`) — the backend default. */
+    val enableQuizRefreshers: Boolean = true,
+    /** Legacy behavioural-gap-level refreshers (the pre-quiz model). */
+    val enableGapRefreshers: Boolean = false,
+    /** Referral/assessment action-gap refreshers (`spice_action_observed`). */
+    val enableReferralRefreshers: Boolean = false,
+    /** Today's-visit stand-in refreshers (`assessment_due` trigger bindings). */
+    val enableVisitRefreshers: Boolean = false,
 )
 
 /** Supported coaching interface languages. */

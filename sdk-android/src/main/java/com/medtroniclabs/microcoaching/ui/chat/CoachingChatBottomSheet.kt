@@ -7,8 +7,10 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.core.view.updateLayoutParams
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -23,7 +25,6 @@ import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.medtroniclabs.microcoaching.ui.screens.ChatScreen
-import com.medtroniclabs.microcoaching.ui.screens.ChatSheetDragHandle
 import com.medtroniclabs.microcoaching.ui.theme.MicroCoachingTheme
 
 /**
@@ -98,16 +99,20 @@ class CoachingChatBottomSheet : BottomSheetDialogFragment() {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 MicroCoachingTheme {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        // Compact custom drag handle — tune via the *DragHandle*
-                        // constants at the top of ChatScreen.kt.
-                        ChatSheetDragHandle()
-                        CoachingChatSurface(
-                            patientId = patientId,
-                            systemContext = systemContext,
-                            onClose = { dismissAllowingStateLoss() },
-                            showCloseIcon = true,
-                        )
+                    Surface(
+                        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Spacer(Modifier.height(8.dp))
+                            CoachingChatSurface(
+                                patientId = patientId,
+                                systemContext = systemContext,
+                                onClose = { dismissAllowingStateLoss() },
+                                showCloseIcon = true,
+                            )
+                        }
                     }
                 }
             }
@@ -290,8 +295,7 @@ private fun ChatSheetDownloadingPreview() {
 
 /**
  * Wraps preview content in a Surface that mimics the live bottom sheet — same
- * rounded top corners, same background, same compact drag handle. Used by
- * every chat-sheet preview in this file.
+ * rounded top corners, same background. Used by every chat-sheet preview in this file.
  */
 @Composable
 private fun ChatSheetPreviewFrame(content: @Composable () -> Unit) {
@@ -301,7 +305,7 @@ private fun ChatSheetPreviewFrame(content: @Composable () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            ChatSheetDragHandle()
+            Spacer(Modifier.height(8.dp))
             content()
         }
     }

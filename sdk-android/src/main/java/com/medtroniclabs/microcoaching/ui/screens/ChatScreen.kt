@@ -51,8 +51,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import android.util.Log
 import com.medtroniclabs.microcoaching.Language
@@ -78,6 +80,7 @@ import com.medtroniclabs.microcoaching.ui.common.StreamingBubble
 import com.medtroniclabs.microcoaching.ui.components.TranslationModelStateChip
 import com.medtroniclabs.microcoaching.ui.common.ChatInputState
 import com.medtroniclabs.microcoaching.ui.common.rememberChatInputState
+import com.medtroniclabs.microcoaching.ui.screens.components.SourceDocChipRow
 
 // ── Sheet tuning knobs — tweak these to reshape the chat sheet chrome ─────────
 /**
@@ -92,20 +95,6 @@ private val ChatHeaderVerticalPadding = 4.dp
  */
 private val ChatHeaderHorizontalPadding = 16.dp
 
-/**
- * Vertical padding around the custom drag handle wrapper. The Material3 default
- * is 22.dp top + 22.dp bottom (visually quite tall). We use a tighter value so
- * the sheet header sits closer to the top edge of the sheet.
- */
-private val ChatDragHandleVerticalPadding = 10.dp
-
-/**
- * Width × height of the small pill inside the drag handle. The Material3
- * defaults are 32 × 4 dp; we ship the same so the affordance stays recognisable
- * — knobs are exposed in case the design moves.
- */
-private val ChatDragHandleWidth = 32.dp
-private val ChatDragHandleHeight = 4.dp
 
 @Composable
 fun ChatScreen(
@@ -124,7 +113,7 @@ fun ChatScreen(
     inputState: ChatInputState =
         rememberChatInputState(),
     isRecording: Boolean = false,
-    sttDownloadState: com.medtroniclabs.microcoaching.ai.voice.stt.SttModelState? = null,
+    sttDownloadState: SttModelState? = null,
     onRetrySttDownload: () -> Unit = {},
     onCancelSttDownload: () -> Unit = {},
     voiceModelItemState: DownloadItemUiState = DownloadItemUiState.Idle,
@@ -136,7 +125,7 @@ fun ChatScreen(
     onDownloadVoiceModel: () -> Unit = {},
     networkAvailable: Boolean = true,
     moduleTitleLookup: (String?) -> String? = { null },
-    onSourceDocTap: (sourceDocumentId: String, label: String) -> Unit = { _, _ -> },
+    onSourceDocTap: (sourceDocumentId: String, label: String, startPage: Int?) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -212,7 +201,7 @@ private fun ReadyChatContent(
     onMicTap: (() -> Unit)?,
     inputState: ChatInputState,
     isRecording: Boolean,
-    sttDownloadState: com.medtroniclabs.microcoaching.ai.voice.stt.SttModelState?,
+    sttDownloadState: SttModelState?,
     onRetrySttDownload: () -> Unit,
     onCancelSttDownload: () -> Unit,
     voiceBackend: ChatVoiceInputController.Backend?,
@@ -223,7 +212,7 @@ private fun ReadyChatContent(
     onClearHistory: () -> Unit,
     networkAvailable: Boolean,
     moduleTitleLookup: (String?) -> String?,
-    onSourceDocTap: (String, String) -> Unit,
+    onSourceDocTap: (String, String, Int?) -> Unit,
 ) {
     val listState = rememberLazyListState()
 
@@ -246,6 +235,7 @@ private fun ReadyChatContent(
             onClearHistory = onClearHistory,
             showVoiceModelDownloadAction = showVoiceModelDownloadAction,
             onDownloadVoiceModel = onDownloadVoiceModel,
+            networkAvailable = networkAvailable,
         )
         HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
@@ -293,11 +283,31 @@ private fun ReadyChatContent(
                         Column(modifier = Modifier.fillMaxWidth()) {
                             AssistantBubbleWithAvatar(message = message)
                             if (message.sourceDocuments.isNotEmpty()) {
-                                com.medtroniclabs.microcoaching.ui.screens.components.SourceDocChipRow(
+                                // Short italic citation line — module title or first doc title
+                              /*  val citationText = moduleTitleLookup(message.groundingModuleFamilyId)
+                                    ?: message.sourceDocuments.firstOrNull()
+                                        ?.title?.takeIf { it.isNotBlank() }
+                                if (citationText != null) {
+                                    Text(
+                                        text = "— $citationText",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontStyle = FontStyle.Italic,
+                                        ),
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                                        modifier = Modifier.padding(
+                                            start = 56.dp,
+                                            top = 2.dp,
+                                            end = 12.dp,
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                } */
+                                SourceDocChipRow(
                                     sourceDocuments = message.sourceDocuments,
                                     moduleTitle = moduleTitleLookup(message.groundingModuleFamilyId),
-                                    online = networkAvailable,
                                     onTap = onSourceDocTap,
+                                    startPage = message.startPage,
                                     modifier = Modifier.padding(start = 56.dp, end = 12.dp),
                                 )
                             }
@@ -334,7 +344,7 @@ private fun ReadyChatContent(
         // Suggestion chips live above the input (per ai-coach.png) — NOT inside
         // the message list anymore. They surface for as long as the source data
         // has chips to offer; ChatViewModel decides when to refresh them.
-        if (uiState.suggestedQuestions.isNotEmpty()) {
+        if (uiState.suggestedQuestions.isNotEmpty() && !uiState.isGenerating) {
             SuggestionRow(
                 questions = uiState.suggestedQuestions,
                 onSendSuggested = onSendSuggested,
@@ -382,31 +392,6 @@ private fun ReadyChatContent(
     }
 }
 
-/**
- * Compact drag handle for the chat sheet — same look as the Material3 default
- * but with tighter vertical padding so the sheet header sits closer to the top.
- * Wired into `CoachingChatBottomSheet`'s `ModalBottomSheet(dragHandle = ...)`.
- *
- * Tune via [ChatDragHandleVerticalPadding] / [ChatDragHandleWidth] /
- * [ChatDragHandleHeight] at the top of this file.
- */
-@Composable
-fun ChatSheetDragHandle(
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = ChatDragHandleVerticalPadding),
-        contentAlignment = Alignment.Center,
-    ) {
-        Surface(
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-            shape = RoundedCornerShape(50),
-            modifier = Modifier.size(width = ChatDragHandleWidth, height = ChatDragHandleHeight),
-        ) {}
-    }
-}
 
 /**
  * Header row for the chat sheet — avatar, title, online dot, optional close icon.
@@ -419,6 +404,7 @@ private fun ChatSheetHeader(
     onClearHistory: () -> Unit,
     showVoiceModelDownloadAction: Boolean = false,
     onDownloadVoiceModel: () -> Unit = {},
+    networkAvailable: Boolean = true,
 ) {
     // Two local toggles power the overflow flow:
     //   - `showOverflow`: anchors the kebab dropdown to the kebab IconButton
@@ -464,18 +450,26 @@ private fun ChatSheetHeader(
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Green status dot — matches the "Online" badge in the design.
+                val statusColor = if (networkAvailable) {
+                    Color(0xFF2E7D32)
+                } else {
+                    MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                }
                 Box(
                     modifier = Modifier
                         .size(6.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF2E7D32)),
+                        .background(statusColor),
                 )
                 Spacer(Modifier.size(width = 6.dp, height = 0.dp))
                 Text(
-                    text = stringResource(R.string.chat_header_online),
+                    text = if (networkAvailable) {
+                        stringResource(R.string.chat_header_online)
+                    } else {
+                        stringResource(R.string.chat_header_offline)
+                    },
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF2E7D32),
+                    color = statusColor,
                 )
             }
         }

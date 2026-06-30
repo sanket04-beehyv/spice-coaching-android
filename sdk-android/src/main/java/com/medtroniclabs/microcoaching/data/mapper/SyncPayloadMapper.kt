@@ -4,14 +4,23 @@ import com.medtroniclabs.microcoaching.data.db.entity.CoachingEventEntity
 import com.medtroniclabs.microcoaching.data.db.entity.DigitalProficiencyEventEntity
 import com.medtroniclabs.microcoaching.data.db.entity.LlmTraceEntity
 import com.medtroniclabs.microcoaching.network.TelemetryEventPayload
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+
+private val payloadParser = Json { ignoreUnknownKeys = true; isLenient = true }
+
+/** Parse a stored payload string back to a JSON object, or null if it isn't one. */
+private fun parsePayloadObject(raw: String?): JsonObject? =
+    raw?.takeIf { it.isNotBlank() }
+        ?.let { runCatching { payloadParser.parseToJsonElement(it).jsonObject }.getOrNull() }
 
 /**
  * Extension functions that map Room entities to [TelemetryEventPayload] for the backend.
@@ -54,18 +63,30 @@ fun CoachingEventEntity.toPayload(): TelemetryEventPayload = TelemetryEventPaylo
     fallbackUsed = fallbackUsed,
     networkState = networkState,
     payloadJson = buildJsonObject {
-        // Structured gap payload — echoes the top-level fields the backend
-        // uses in its gap-state detection rule alongside the gap identifier.
-        if (behaviouralGapId != null) {
-            cardType?.let { put("card_type", it) }
-            triggerType?.let { put("trigger_type", it) }
-            inferenceMode?.let { put("inference_mode", it) }
-            put("behavioural_gap_id", behaviouralGapId)
-        } else if (payloadJson != null) {
-            put("raw", payloadJson)
+        val structured = parsePayloadObject(payloadJson)
+        when {
+            // Recorders like recordSpiceActionObserved already serialise a flat
+            // object (behavioural_gap_id + correctReferral... + rule_type/evidence)
+            // into the column — emit it directly per Events-Modelling §payload_json.
+            structured != null -> structured.forEach { (k, v) -> put(k, v) }
+            // Events that tag a gap via columns (e.g. module_quiz_attempted) but
+            // carry no structured payload string — echo the non-state fields.
+            behaviouralGapId != null -> {
+                cardType?.let { put("card_type", it) }
+                triggerType?.let { put("trigger_type", it) }
+                inferenceMode?.let { put("inference_mode", it) }
+                put("behavioural_gap_id", behaviouralGapId)
+            }
+            // Genuinely non-JSON legacy string → last-resort raw wrapper.
+            payloadJson != null -> put("raw", payloadJson)
         }
     },
-    timestampUtc = timestampUtc,
+    // `timestamp_utc` must always be present — the backend `coaching_events`
+    // insert rejects null (the API schema marks it nullable, but the ClickHouse
+    // column is not). EventRecorder doesn't capture a separate UTC value, and
+    // `timestampLocal` is `System.currentTimeMillis()` which is already UTC epoch,
+    // so fall back to it. This also fixes already-queued rows at sync time.
+    timestampUtc = timestampUtc ?: timestampLocal,
     timestampLocal = timestampLocal,
 )
 
@@ -87,6 +108,7 @@ fun LlmTraceEntity.toPayload(): TelemetryEventPayload = TelemetryEventPayload(
         inputTokens?.let { put("input_tokens", it) }
         outputTokens?.let { put("output_tokens", it) }
     },
+    timestampUtc = timestampLocal,
     timestampLocal = timestampLocal,
 )
 
@@ -102,5 +124,6 @@ fun DigitalProficiencyEventEntity.toPayload(): TelemetryEventPayload = Telemetry
         errorType?.let { put("error_type", it) }
     },
     networkState = networkState,
+    timestampUtc = timestampLocal,
     timestampLocal = timestampLocal,
 )

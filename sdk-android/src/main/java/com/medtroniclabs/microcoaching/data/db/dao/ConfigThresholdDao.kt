@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.medtroniclabs.microcoaching.data.db.entity.ConfigThresholdEntity
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ConfigThresholdDao {
@@ -28,6 +29,10 @@ interface ConfigThresholdDao {
 
     @Query("SELECT * FROM config_threshold")
     suspend fun getAll(): List<ConfigThresholdEntity>
+
+    /** Reactive view of the global (non-module-scoped) rows — drives the SDK's cached learning-points config. */
+    @Query("SELECT * FROM config_threshold WHERE module_family_id = ''")
+    fun getGlobalFlow(): Flow<List<ConfigThresholdEntity>>
 
     @Query("SELECT COUNT(*) FROM config_threshold")
     suspend fun count(): Int

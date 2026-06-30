@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.medtroniclabs.microcoaching.R
@@ -43,6 +44,12 @@ import com.medtroniclabs.microcoaching.ui.theme.SpiceBlue
  *
  * Reveal is animated: vertical expand + fade. `visible` should be driven by
  * whether the current question has been answered.
+ *
+ * @param footerOverride When non-null, renders in place of the default
+ *   "Next Question" button (the explanation box above is unchanged). The
+ *   refresher sheet uses this to surface the "Next refresher / Done" actions on
+ *   the last question; [onNext] is then ignored. Default null preserves the
+ *   standard button everywhere else.
  */
 @Composable
 fun InlineAnswerFeedback(
@@ -50,6 +57,7 @@ fun InlineAnswerFeedback(
     explanation: String,
     onNext: () -> Unit,
     modifier: Modifier = Modifier,
+    footerOverride: (@Composable () -> Unit)? = null,
 ) {
     AnimatedVisibility(
         visible = visible,
@@ -64,16 +72,21 @@ fun InlineAnswerFeedback(
             if (explanation.isNotBlank()) {
                 WhyThisMattersBox(explanation = explanation)
             }
-            Button(
-                onClick = onNext,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(28.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = SpiceBlue),
-            ) {
-                Text(
-                    text = stringResource(R.string.quiz_next_question),
-                    fontWeight = FontWeight.SemiBold,
-                )
+            if (footerOverride != null) {
+                footerOverride()
+            } else {
+                Button(
+                    onClick = onNext,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = SpiceBlue),
+                ) {
+                    Text(
+                        text = stringResource(R.string.quiz_next_question),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             }
         }
     }

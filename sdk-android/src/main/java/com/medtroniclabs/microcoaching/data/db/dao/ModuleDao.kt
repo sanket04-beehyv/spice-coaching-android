@@ -14,11 +14,11 @@ interface ModuleDao {
      * Backend only ships published modules through `/sync/modules`, so every
      * row in the cache is active. Sorted for stable UI ordering.
      */
-    @Query("SELECT * FROM module_cache ORDER BY domain, title_bn")
+    @Query("SELECT * FROM module_cache ORDER BY domain, module_id")
     fun getAllActive(): Flow<List<ModuleEntity>>
 
     /** One-shot read for joins — used by [MicroCoachingSDK.resolveFromCache]. */
-    @Query("SELECT * FROM module_cache ORDER BY domain, title_bn")
+    @Query("SELECT * FROM module_cache ORDER BY domain, module_id")
     suspend fun getAllOrderedOnce(): List<ModuleEntity>
 
     /** Look up by module version id (the primary key). */
@@ -33,7 +33,7 @@ interface ModuleDao {
     @Query("SELECT * FROM module_cache WHERE module_family_id = :familyId ORDER BY version DESC LIMIT 1")
     suspend fun getByFamilyId(familyId: String): ModuleEntity?
 
-    @Query("SELECT * FROM module_cache WHERE domain = :domain ORDER BY title_bn")
+    @Query("SELECT * FROM module_cache WHERE domain = :domain ORDER BY module_id")
     fun getByDomain(domain: String): Flow<List<ModuleEntity>>
 
     @Query("SELECT COUNT(*) FROM module_cache")

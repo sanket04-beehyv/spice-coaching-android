@@ -2,15 +2,28 @@ package com.medtroniclabs.microcoaching.ui.flow
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import com.medtroniclabs.microcoaching.R
+import com.medtroniclabs.microcoaching.ui.document.DocumentPreviewActivity
+import com.medtroniclabs.microcoaching.ui.learn.DocEvent
+import com.medtroniclabs.microcoaching.ui.learn.modules.ALL_MODULES_TYPE_KNOWLEDGE
+import kotlinx.coroutines.launch
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentManager
 import androidx.lifecycle.ViewModelStoreOwner
@@ -30,8 +43,11 @@ import com.medtroniclabs.microcoaching.ui.learn.LearnModule
 import com.medtroniclabs.microcoaching.ui.learn.LearnViewModel
 import com.medtroniclabs.microcoaching.ui.learn.LearnUiState
 import com.medtroniclabs.microcoaching.ui.learn.ModuleReadyScreen
+import com.medtroniclabs.microcoaching.ui.learn.modules.ALL_MODULES_TYPE_REFRESHER
 import com.medtroniclabs.microcoaching.ui.learn.modules.ALL_MODULES_TYPE_TRAINING
 import com.medtroniclabs.microcoaching.ui.learn.modules.AllModulesScreen
+import com.medtroniclabs.microcoaching.ui.learn.modules.RefreshersScreen
+import com.medtroniclabs.microcoaching.ui.learn.modules.components.KnowledgeDownloadBar
 import com.medtroniclabs.microcoaching.ui.learn.LessonCompleteScreen
 import com.medtroniclabs.microcoaching.ui.learn.LessonPlayerScreen
 import com.medtroniclabs.microcoaching.ui.learn.QuizRetryGate
@@ -96,6 +112,34 @@ fun CoachingNavGraph(
     // Captures the last module tapped in RefresherList so its familyId can be
     // forwarded to RefresherBottomSheet (which runs in a separate Fragment scope).
     var lastRefresherModuleFamilyId: String? by remember { mutableStateOf(null) }
+
+    // Knowledge documents (deduped source docs) + the download → preview flow.
+    val knowledgeDocs by learnVm.knowledgeDocuments.collectAsState()
+    val cachedDocIds by learnVm.cachedDocIds.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val docScope = rememberCoroutineScope()
+    // Live download progress drives a bottom progress surface (the Material
+    // snackbar can't live-update its text). Null = nothing downloading.
+    val downloadProgress by learnVm.downloadProgress.collectAsState()
+    LaunchedEffect(Unit) {
+        learnVm.docEvents.collect { event ->
+            when (event) {
+                is DocEvent.Ready ->
+                    DocumentPreviewActivity.start(
+                        context,
+                        event.sourceDocumentId,
+                        event.title,
+                        originalFilename = event.fileName,
+                    )
+                DocEvent.Unavailable -> docScope.launch {
+                    snackbarHostState.showSnackbar(
+                        message = context.getString(R.string.knowledge_doc_unavailable_offline),
+                        duration = SnackbarDuration.Short,
+                    )
+                }
+            }
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -165,31 +209,47 @@ fun CoachingNavGraph(
                     // dismiss handler does a fresh DB read for belt-and-braces.
                     lastRefresherModuleFamilyId = module.moduleFamilyId
                 },
-                onKnowledgeSelect = { module ->
-                    learnVm.selectModule(module)
-                    learnVm.startLesson()
-                    navController.navigate(CoachingRoute.LessonContent.route)
-                },
-                onShowQuickLearn = { moduleFamilyId ->
-                    android.util.Log.d("CoachingNavGraph", "Showing RefresherBottomSheet (question-first) target=$moduleFamilyId")
+                onShowQuickLearn = { moduleFamilyId, queueFamilyIds ->
+                    android.util.Log.d("CoachingNavGraph", "Showing RefresherBottomSheet (cards-first) target=$moduleFamilyId queue=${queueFamilyIds.size}")
+                    // Every refresher entry — including the QuizRefresherCard banner —
+                    // opens cards-first (lesson cards → quiz).
                     RefresherBottomSheet.show(
                         fragmentManager, chwId,
                         fromHomeScreen = false,
+                        entryMode = RefresherBottomSheet.EntryMode.CARDS_FIRST,
                         targetModuleFamilyId = moduleFamilyId,
+                        queueFamilyIds = queueFamilyIds,
                     )
                 },
-                onShowRefresherQuiz = {
-                    android.util.Log.d("CoachingNavGraph", "Showing RefresherBottomSheet for tile=${lastRefresherModuleFamilyId}")
+                onShowRefresherQuiz = { queueFamilyIds ->
+                    android.util.Log.d("CoachingNavGraph", "Showing RefresherBottomSheet (cards-first) for tile=${lastRefresherModuleFamilyId} queue=${queueFamilyIds.size}")
+                    // RefresherList entries open cards-first (lesson cards → quiz),
+                    // same as every other refresher entry point.
                     RefresherBottomSheet.show(
                         fragmentManager, chwId,
                         fromHomeScreen = false,
+                        entryMode = RefresherBottomSheet.EntryMode.CARDS_FIRST,
                         targetModuleFamilyId = lastRefresherModuleFamilyId,
+                        queueFamilyIds = queueFamilyIds,
                     )
                 },
                 onRetrySync = learnVm::retrySync,
                 onSeeAllTraining = {
                     navController.navigate(
                         CoachingRoute.AllModules.routeFor(ALL_MODULES_TYPE_TRAINING),
+                    )
+                },
+                onSeeAllRefreshers = {
+                    navController.navigate(
+                        CoachingRoute.AllModules.routeFor(ALL_MODULES_TYPE_REFRESHER),
+                    )
+                },
+                knowledgeDocuments = knowledgeDocs,
+                cachedDocIds = cachedDocIds,
+                onKnowledgeDocSelect = { doc -> learnVm.openKnowledgeDocument(doc) },
+                onSeeAllKnowledge = {
+                    navController.navigate(
+                        CoachingRoute.AllModules.routeFor(ALL_MODULES_TYPE_KNOWLEDGE),
                     )
                 },
             )
@@ -199,14 +259,47 @@ fun CoachingNavGraph(
             val moduleType = backStackEntry.arguments
                 ?.getString(CoachingRoute.AllModules.ARG_MODULE_TYPE)
                 ?: ALL_MODULES_TYPE_TRAINING
+
+            // Refreshers get their own full-screen list (tiles are list-shaped,
+            // not grid cells) sourced from the shared store. Tapping a tile runs
+            // the IDENTICAL path to the home Refresher list: capture the tapped
+            // module's family id, then open RefresherBottomSheet cards-first.
+            if (moduleType == ALL_MODULES_TYPE_REFRESHER) {
+                RefreshersScreen(
+                    onRefresherStart = { module ->
+                        lastRefresherModuleFamilyId = module.moduleFamilyId
+                    },
+                    onShowRefresherQuiz = { queueFamilyIds ->
+                        android.util.Log.d("CoachingNavGraph", "RefreshersScreen → RefresherBottomSheet (cards-first) for tile=$lastRefresherModuleFamilyId queue=${queueFamilyIds.size}")
+                        RefresherBottomSheet.show(
+                            fragmentManager, chwId,
+                            fromHomeScreen = false,
+                            entryMode = RefresherBottomSheet.EntryMode.CARDS_FIRST,
+                            targetModuleFamilyId = lastRefresherModuleFamilyId,
+                            queueFamilyIds = queueFamilyIds,
+                        )
+                    },
+                    onBack = { navController.popBackStack() },
+                    onHome = onFinish,
+                )
+                return@composable
+            }
+
             val uiState by learnVm.uiState.collectAsState()
             // Source the list from the current ModuleList state; fall back to the
             // last non-empty list so a transient non-list state (e.g. while a
             // tapped module pushes LessonContent) doesn't blank the grid.
             val lastList = remember { mutableStateOf<List<LearnModule>>(emptyList()) }
             (uiState as? LearnUiState.ModuleList)?.let { lastList.value = it.modules }
+            // The Training "see all" must honour the same assignment filter as the
+            // home screen's inline TrainingRow: both read the store's already-
+            // filtered trainingModules. `uiState.modules` is the FULL mapped
+            // catalogue (assignment-agnostic, shared with chat scope logic), so
+            // using it here would leak unassigned modules into the grid. Other
+            // types fall back to the full list (knowledge ignores `modules`).
+            val assignedTraining by learnVm.trainingModules.collectAsState()
             AllModulesScreen(
-                modules = lastList.value,
+                modules = if (moduleType == ALL_MODULES_TYPE_TRAINING) assignedTraining else lastList.value,
                 moduleType = moduleType,
                 onSelect = { module ->
                     // Identical to the ModulesScreen tap path so the detail/quiz
@@ -217,10 +310,24 @@ fun CoachingNavGraph(
                 },
                 onBack = { navController.popBackStack() },
                 onHome = onFinish,
+                knowledgeDocuments = knowledgeDocs,
+                onDocSelect = { doc -> learnVm.openKnowledgeDocument(doc) },
+                cachedDocIds = cachedDocIds,
             )
         }
 
         composable(CoachingRoute.LessonContent.route) {
+            // Restored onto this route after process death (back stack survives,
+            // VM state doesn't) → no module to show. Bounce home instead of
+            // rendering blank. Captured once at entry so it can't misfire during
+            // the back-navigation state flip. See [RecoverToModulesHome].
+            val hasBackingState = remember {
+                learnVm.uiState.value is LearnUiState.LessonContent
+            }
+            if (!hasBackingState) {
+                RecoverToModulesHome(navController)
+                return@composable
+            }
             val uiState by learnVm.uiState.collectAsState()
             // System back / header back both restore ModuleList state from the
             // cached module list and pop the LessonContent entry off the stack.
@@ -256,30 +363,20 @@ fun CoachingNavGraph(
         }
 
         composable(CoachingRoute.LessonPlayer.route) {
+            // See LessonContent above — recover instead of blanking when the
+            // lesson-player route is restored without its backing module.
+            val hasBackingState = remember {
+                learnVm.uiState.value is LearnUiState.LessonContent
+            }
+            if (!hasBackingState) {
+                RecoverToModulesHome(navController)
+                return@composable
+            }
             val uiState by learnVm.uiState.collectAsState()
             val module = (uiState as? LearnUiState.LessonContent)?.module
             val autoSpeak by learnVm.autoSpeakEnabled.collectAsState()
             if (module != null) {
                 // The module overload reads SDK language internally.
-                //
-                // Read-only mode (last-card CTA → "Back to modules", no quiz
-                // path) is now driven *purely* by the retry-window gate
-                // (see [QuizRetryGate]):
-                //
-                //   - Within 7 days of publication: gate open → CHW can
-                //     (re)take the quiz, even after passing. This matches
-                //     PM direction — completed modules stay re-quizzable
-                //     during the initial window.
-                //   - After 7 days AND every question already attempted:
-                //     gate closed → "Back to modules".
-                //
-                // When removing the retry-window feature: delete the call,
-                // the readOnly local goes back to `false`, and completed
-                // modules become indefinitely re-quizzable. If product
-                // wants the previous "completed → read-only" behaviour
-                // restored without the gate, OR `module.status == "completed"`
-                // back in here.
-                val readOnly = QuizRetryGate.isRetryWindowClosed(module)
                 LessonPlayerScreen(
                     module = module,
                     onBack = {
@@ -298,7 +395,6 @@ fun CoachingNavGraph(
                         learnVm.startQuiz()
                         navController.navigate(CoachingRoute.QuizQuestion.routeFor(0))
                     },
-                    readOnly = readOnly,
                     onFinishReading = {
                         // "Back to modules" — exit revisit mode all the way
                         // to the modules list. Uses the existing
@@ -341,6 +437,17 @@ fun CoachingNavGraph(
             ),
         ) { backStack ->
             val index = backStack.arguments?.getInt(CoachingRoute.QuizQuestion.ARG_QUESTION_INDEX) ?: 0
+            // See LessonContent above — recover instead of blanking when the quiz
+            // route is restored without its questions (the screen itself would
+            // `return` to nothing for this index).
+            val hasBackingState = remember(index) {
+                (learnVm.uiState.value as? LearnUiState.QuizInProgress)
+                    ?.questions?.getOrNull(index) != null
+            }
+            if (!hasBackingState) {
+                RecoverToModulesHome(navController)
+                return@composable
+            }
             val uiState by learnVm.uiState.collectAsState()
             QuizQuestionScreen(
                 uiState = uiState,
@@ -377,6 +484,15 @@ fun CoachingNavGraph(
         }
 
         composable(CoachingRoute.QuizResult.route) {
+            // See LessonContent above — recover instead of blanking when the
+            // result route is restored without its computed QuizResult state.
+            val hasBackingState = remember {
+                learnVm.uiState.value is LearnUiState.QuizResult
+            }
+            if (!hasBackingState) {
+                RecoverToModulesHome(navController)
+                return@composable
+            }
             val uiState by learnVm.uiState.collectAsState()
             QuizResultScreen(
                 uiState = uiState,
@@ -439,5 +555,66 @@ fun CoachingNavGraph(
                 },
             )
         }
+
+        // Knowledge document download feedback. Live % progress shows in a bottom
+        // bar (snackbar text can't update); the snackbar is used only for the
+        // "not available offline" error. Driven by learnVm above.
+        downloadProgress?.let { progress ->
+            KnowledgeDownloadBar(
+                progress = progress,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth(),
+            )
+        }
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(),
+        )
+    }
+}
+
+/**
+ * Recovery surface for a deep destination that was restored without its backing
+ * [LearnViewModel] state.
+ *
+ * The deep screens (LessonContent / LessonPlayer / QuizQuestion / QuizResult)
+ * render gated on `uiState` — which only lives in memory (`activeModule`,
+ * `activeQuestions`, `_uiState`). Navigation-Compose, however, persists the back
+ * stack across **process death**, so a low-memory kill (typically after the CHW
+ * leaves via the Home / Recents system buttons) can restore us straight onto one
+ * of those routes with the VM reset to [LearnUiState.Loading]. With nothing to
+ * render the screen goes blank — exactly the QA-reported symptom.
+ *
+ * Rather than composing blank we bounce back to the modules home, which renders
+ * its own `Loading → ModuleList` states gracefully. We prefer [NavHostController.popBackStack]
+ * to ModuleReady (the restored start destination sits at the bottom of the stack,
+ * so this also clears the orphaned deep entries); only if it isn't on the stack do
+ * we navigate fresh.
+ *
+ * Callers gate entry to this with a `remember { uiState.value }` snapshot — read
+ * once when the destination first enters composition — so it can only fire on a
+ * genuine state-loss restore, never during the normal back-navigation window where
+ * `popToModuleList()` momentarily flips `uiState` to `ModuleList` while the old
+ * entry is still animating out.
+ */
+@Composable
+private fun RecoverToModulesHome(navController: NavHostController) {
+    LaunchedEffect(Unit) {
+        val popped = navController.popBackStack(
+            route = CoachingRoute.ModuleReady.route,
+            inclusive = false,
+        )
+        if (!popped) {
+            navController.navigate(CoachingRoute.ModuleReady.route) {
+                popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator()
     }
 }

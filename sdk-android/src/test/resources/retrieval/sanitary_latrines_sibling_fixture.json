@@ -1,0 +1,32 @@
+{
+  "id": "sanitary_latrines_sibling",
+  "module_family_id": "b5a3f612-2590-4082-8fd0-a500b8908a69",
+  "module_id": "fixture-sanitary-latrines",
+  "title_en": "Benefits of Using Sanitary Latrines",
+  "cards": [
+    {
+      "title_en": "Benefits of Using Sanitary Latrines",
+      "body_en": "Sanitary latrines improve dignity and reduce odor in the home."
+    },
+    {
+      "title_en": "Prevention of Waterborne and Feces-borne Diseases",
+      "body_en": "Proper latrine use blocks fecal contamination of water sources.",
+      "retrieval_hints_en": [
+        "how do sanitary latrines help prevent disease spread"
+      ]
+    }
+  ],
+  "search_metadata": {
+    "search_phrases_en": [
+      "how do sanitary latrines help prevent disease spread",
+      "benefits of sanitary latrines"
+    ]
+  },
+  "queries": [
+    {
+      "query": "How do sanitary latrines help prevent disease spread?",
+      "expected_card_index": 1,
+      "benchmark_ref": "Q30"
+    }
+  ]
+}

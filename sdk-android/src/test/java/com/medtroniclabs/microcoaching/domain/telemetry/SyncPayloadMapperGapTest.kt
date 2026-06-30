@@ -21,6 +21,8 @@ class SyncPayloadMapperGapTest {
         inferenceMode: String? = null,
         payloadJson: String? = null,
         behaviouralGapId: String? = null,
+        timestampLocal: Long = 1_700_000_000_000L,
+        timestampUtc: Long? = null,
     ) = CoachingEventEntity(
         eventId = "evt-1",
         sdkVersion = "0.3.x",
@@ -33,6 +35,8 @@ class SyncPayloadMapperGapTest {
         inferenceMode = inferenceMode,
         payloadJson = payloadJson,
         behaviouralGapId = behaviouralGapId,
+        timestampLocal = timestampLocal,
+        timestampUtc = timestampUtc,
     )
 
     @Test
@@ -96,5 +100,42 @@ class SyncPayloadMapperGapTest {
 
         assertEquals("gap-wins", json["behavioural_gap_id"]?.jsonPrimitive?.content)
         assertNull(json["raw"])
+    }
+
+    @Test
+    fun `timestamp_utc is never null - falls back to timestamp_local`() {
+        // The backend coaching_events insert rejects a null timestamp_utc; the
+        // entity never captures a separate UTC value, so it must default to the
+        // (UTC epoch) timestamp_local.
+        val payload = minimalEntity(timestampLocal = 1_700_000_000_000L, timestampUtc = null).toPayload()
+        assertEquals(1_700_000_000_000L, payload.timestampUtc)
+        assertEquals(payload.timestampLocal, payload.timestampUtc)
+    }
+
+    @Test
+    fun `explicit timestamp_utc is preserved`() {
+        val payload = minimalEntity(timestampLocal = 1_700_000_000_000L, timestampUtc = 1_699_999_999_000L).toPayload()
+        assertEquals(1_699_999_999_000L, payload.timestampUtc)
+    }
+
+    @Test
+    fun `a structured payload string is emitted flat, not wrapped under raw`() {
+        // recordSpiceActionObserved stores a flat JSON object as the payload
+        // string; it must be flattened into payload_json (Events-Modelling §70),
+        // not double-encoded under "raw".
+        val payload = minimalEntity(
+            eventType = "spice_action_observed",
+            behaviouralGapId = "gap-7",
+            payloadJson = """{"behavioural_gap_id":"gap-7","correctReferral":false,""" +
+                """"correctReferralLocation":false,"correctReferralType":true,""" +
+                """"rule_type":"spice_referral_compliance"}""",
+        ).toPayload()
+        val json = payload.payloadJson
+
+        assertNull(json["raw"])
+        assertEquals("gap-7", json["behavioural_gap_id"]?.jsonPrimitive?.content)
+        assertEquals("false", json["correctReferral"]?.jsonPrimitive?.content)
+        assertEquals("true", json["correctReferralType"]?.jsonPrimitive?.content)
+        assertEquals("spice_referral_compliance", json["rule_type"]?.jsonPrimitive?.content)
     }
 }

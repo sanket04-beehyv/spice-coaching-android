@@ -19,6 +19,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,6 +30,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.medtroniclabs.microcoaching.MicroCoachingSDK
 import com.medtroniclabs.microcoaching.R
 import com.medtroniclabs.microcoaching.ui.common.AnswerCard
 import com.medtroniclabs.microcoaching.ui.common.AnswerCardState
@@ -79,6 +81,11 @@ fun QuizQuestionScreen(
     // via `remember(questionIndex)` so revisits don't replay the animation.
     var xpBurstKey by remember(questionIndex) { mutableStateOf<Any?>(null) }
 
+    // Per-correct-answer reward comes from the shared learning-points config
+    // (config_threshold → quiz_score_multiplier), not the legacy per-question
+    // pointValue. Falls back to the documented default when unsynced.
+    val learningPoints by MicroCoachingSDK.getInstance().learningPoints.collectAsState()
+
     // Intercept system back — go to lesson player or module detail rather
     // than stepping back through quiz questions one-by-one.
     BackHandler(onBack = onBack)
@@ -103,11 +110,12 @@ fun QuizQuestionScreen(
                 .padding(24.dp)
                 .navigationBarsPadding(),
         ) {
-            // Case setup — clinical scenario shown above the question when present
-            if (question.caseSetup.isNotBlank()) {
-                CaseSetupBox(caseSetup = question.caseSetup)
-                Spacer(Modifier.height(16.dp))
-            }
+            // Case setup / "Context" block intentionally hidden per product
+            // direction — keep the data + composable, just don't render it.
+            // if (question.caseSetup.isNotBlank()) {
+            //     CaseSetupBox(caseSetup = question.caseSetup)
+            //     Spacer(Modifier.height(16.dp))
+            // }
 
             Text(
                 text = stringResource(R.string.quiz_question_counter, questionIndex + 1, totalQuestions),
@@ -196,13 +204,14 @@ fun QuizQuestionScreen(
 
         // Celebratory XP burst overlay — sits above the scrolling content so
         // it pops in at the top of the answer area without displacing layout.
-        XpRewardBurst(
-            triggerKey = xpBurstKey,
-            pointValue = question.pointValue,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 24.dp),
-        )
+        // Points/XP display temporarily disabled — UI only; burst trigger + scoring logic retained.
+        // XpRewardBurst(
+        //     triggerKey = xpBurstKey,
+        //     pointValue = learningPoints.quizScoreMultiplier,
+        //     modifier = Modifier
+        //         .align(Alignment.TopCenter)
+        //         .padding(top = 24.dp),
+        // )
         }
     }
 }

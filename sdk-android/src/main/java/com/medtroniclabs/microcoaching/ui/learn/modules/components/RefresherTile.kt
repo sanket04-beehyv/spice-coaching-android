@@ -12,7 +12,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.MedicalServices
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -24,9 +23,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.medtroniclabs.microcoaching.R
 import com.medtroniclabs.microcoaching.ui.theme.SpiceBlueContainer
 import com.medtroniclabs.microcoaching.ui.theme.SpiceBlueDark
 
@@ -52,6 +53,7 @@ fun RefresherTile(
     meta: String,
     isCritical: Boolean,
     isGap: Boolean = false,
+    severity: String? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     thumbnailUrl: String? = null,
@@ -95,6 +97,7 @@ fun RefresherTile(
                     if (isCritical) {
                         CriticalBadge()
                     }
+                    SeverityChip(severity)
                 }
                 Text(
                     text = title,
@@ -115,9 +118,8 @@ fun RefresherTile(
 @Composable
 private fun RefresherIconBlock(category: String, thumbnailUrl: String? = null) {
     val icon: ImageVector = when {
-        category.contains("assessment", ignoreCase = true) -> Icons.Outlined.Assignment
-        category.contains("learning", ignoreCase = true) -> Icons.Outlined.MedicalServices
-        else -> Icons.Outlined.Settings
+        category.contains("quiz", ignoreCase = true) -> Icons.Outlined.Assignment
+        else -> Icons.Outlined.MedicalServices
     }
     ModuleThumbnail(
         thumbnailUrl = thumbnailUrl,
@@ -152,6 +154,36 @@ private fun CriticalBadge() {
     ) {
         Text(
             text = androidx.compose.ui.res.stringResource(com.medtroniclabs.microcoaching.R.string.badge_critical),
+            color = Color.White,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp,
+            ),
+        )
+    }
+}
+
+/**
+ * Small colored chip showing the behavioural-gap severity next to the refresher
+ * type label. Hidden (renders nothing) when [severity] is null/unknown — e.g. a
+ * fallback (non-gap) refresher.
+ */
+@Composable
+private fun SeverityChip(severity: String?) {
+    val (color, labelRes) = when (severity?.lowercase()) {
+        "high" -> Color(0xFFB91C1C) to R.string.severity_high
+        "moderate" -> Color(0xFFD97706) to R.string.severity_moderate
+        "low" -> SpiceBlueDark to R.string.severity_low
+        else -> return
+    }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(color)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        Text(
+            text = stringResource(labelRes),
             color = Color.White,
             style = MaterialTheme.typography.labelSmall.copy(
                 fontWeight = FontWeight.Bold,

@@ -1,0 +1,37 @@
+{
+  "id": "3f515cad-f8f5-4356-a5af-bd15602a4ca5",
+  "module_family_id": "50386c4c-3b75-4815-bc31-176be4a31787",
+  "version": 18,
+  "title": {"bn": "Test08", "en": "Test08 EN"},
+  "description": {"bn": "Test08", "en": "Test08 EN"},
+  "domain": "clinical",
+  "module_type": "refresher",
+  "estimated_minutes": 10,
+  "difficulty_level": "moderate",
+  "clinically_reviewed": true,
+  "updated_at": "2026-06-23T08:09:50.093581Z",
+  "cards": [
+    {
+      "id": "card-0",
+      "title": {"bn": "কার্ড শিরোনাম", "en": "Card title"},
+      "body": {
+        "bn": [{"type": "paragraph", "content": [{"text": "বাংলা বিষয়", "type": "text"}]}],
+        "en": [{"type": "paragraph", "content": [{"text": "English body", "type": "text"}]}]
+      }
+    }
+  ],
+  "quiz": [
+    {
+      "id": "4be36040-4b8c-471f-9515-dcb607a0a68c",
+      "question": {"bn": "Test08", "en": "Test08 EN"},
+      "options": {"bn": ["এ", "বি"], "en": ["Option 1", "Option 2"]},
+      "correct_indices": [0],
+      "explanation": {"bn": "ব্যাখ্যা", "en": "Explanation"},
+      "difficulty": "medium"
+    }
+  ],
+  "search_metadata": {
+    "keywords": {"en": ["immunization"], "bn": ["টিকা"]},
+    "search_phrases": {"en": ["vaccine schedule"]}
+  }
+}

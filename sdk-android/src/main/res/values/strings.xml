@@ -25,6 +25,9 @@
     <string name="chat_source_default">Source document</string>
     <string name="chat_source_offline">Offline</string>
     <string name="chat_source_unavailable">Source document unavailable</string>
+    <string name="chat_source_open_externally">Open in browser</string>
+    <string name="chat_source_page_prev">Previous page</string>
+    <string name="chat_source_page_next">Next page</string>
     <!-- Rich-card media (images / videos embedded in lesson card bodies). -->
     <string name="rich_media_unavailable">Media unavailable</string>
     <string name="rich_image_content_description">Lesson image</string>
@@ -36,29 +39,15 @@
     <string name="chat_model_download_description">The AI model needs to be downloaded before you can start coaching sessions.</string>
     <string name="chat_downloading_model_progress">Downloading model&#8230; (%1$d%%)</string>
     <string name="chat_downloading_model_preparing">Downloading model&#8230; (preparing)</string>
-    <string name="chat_model_size_hint">Requires ~600 MB. Recommended over Wi-Fi.</string>
+    <string name="chat_model_size_hint">Requires ~%1$s. Recommended over Wi-Fi.</string>
     <string name="chat_download_ai_model">Download AI Model</string>
     <string name="chat_suggested_questions">Suggested Questions</string>
     <string name="chat_next_question">Next Question</string>
-    <!--
-        Seed questions shown above the chat input on first open. Curated for
-        CHW workflows in Bangladesh. Each chat session shuffles the unused
-        entries; once the CHW has tapped a suggestion, it's persisted as
-        used and never re-offered (see ChatSuggestionsRepository).
-        The values-bn variant must mirror the same order so used-tracking
-        (keyed on the English text) stays in lockstep across locale switches.
-    -->
-    <string-array name="chat_seed_questions" translatable="true">
-        <item>What should I advise to a PW with Low BP 90/60?</item>
-        <item>How can Breast Engorgement and Pain be managed?</item>
-        <item>Are 25 breaths per minute normal for a newborn?</item>
-        <item>What are the danger signs to refer a pregnant woman?</item>
-        <item>How do I counsel a mother on exclusive breastfeeding?</item>
-    </string-array>
     <string name="chat_input_placeholder">Type a message&#8230;</string>
     <string name="chat_send_message">Send message</string>
     <string name="chat_header_title">AI Coach</string>
     <string name="chat_header_online">Online</string>
+    <string name="chat_header_offline">Offline</string>
     <string name="chat_today">Today</string>
     <string name="chat_welcome_message">How can I help you today? You can ask me about patient counselling, clinical protocols, growth monitoring, or SPICE.</string>
     <string name="chat_close_sheet">Close chat</string>
@@ -139,6 +128,10 @@
     <string name="quiz_correct_answer">Correct answer: %1$s</string>
     <string name="quiz_points">+%1$d pts</string>
     <string name="quiz_review_title">Question Review</string>
+    <string name="quiz_score_summary">You scored %1$d out of %2$d correct</string>
+    <string name="quiz_your_answers">Your answers</string>
+    <string name="quiz_xp_module_caption">Earned for completing this module</string>
+    <string name="quiz_done">Done</string>
 
     <!-- ── FAB ───────────────────────────────────────────────────────────── -->
     <string name="fab_open_coaching">Open coaching</string>
@@ -201,6 +194,8 @@
     <string name="lesson_player_next">Next</string>
     <string name="lesson_player_previous">Previous</string>
     <string name="refresher_card_done">Done</string>
+    <string name="refresher_next">Next refresher</string>
+    <string name="refresher_back">Back</string>
     <string name="lesson_player_start_quiz">Start Quiz</string>
     <string name="lesson_player_back_to_modules">More modules</string>
     <string name="quiz_try_again">Try Again</string>
@@ -247,7 +242,7 @@
 
     <!-- ── Edge model dialogs ────────────────────────────────────────────── -->
     <string name="edge_model_required_title">AI Model Required</string>
-    <string name="edge_model_required_msg">A local AI model is needed to generate personalised coaching cards. Download it now (~600 MB)?</string>
+    <string name="edge_model_required_msg">A local AI model is needed to generate personalised coaching cards. Download it now (~%1$s)?</string>
     <string name="edge_model_download_btn">Download</string>
     <string name="edge_model_later_btn">Later</string>
     <string name="edge_error_title">AI Unavailable</string>
@@ -260,7 +255,11 @@
     <string name="learn_empty_no_internet">No internet connection — connect to the internet and try again.</string>
     <string name="learn_empty_no_modules">No learning modules available right now. New content will appear here when it\'s published.</string>
     <string name="card_error_could_not_load">Could not load card.</string>
-    <string name="chat_error_no_response_available">No response available — check your connection or download the model.</string>
+    <!-- Generic, cause-agnostic: shown when no answer could be produced (backend
+         returned nothing, or local generation came up empty). Deliberately avoids
+         naming connection/model download — the real cause varies and pinning it is
+         misleading. -->
+    <string name="chat_error_no_response_available">Couldn\'t get a response right now. Please try again.</string>
     <string name="chat_error_no_response_generated">No response generated — try again.</string>
 
     <!-- ── Translation pack state chip (Block E) ────────────────────────── -->
@@ -290,7 +289,26 @@
     <string name="modules_section_training">Training</string>
     <string name="modules_section_knowledge">Knowledge</string>
     <string name="modules_see_all">See all</string>
+    <string name="refresher_empty_no_skipped">No skipped refreshers</string>
+    <string name="refresher_empty_none">No refreshers yet.</string>
+    <string name="refresher_more">More</string>
     <string name="modules_download_cd">Download</string>
+    <string name="knowledge_pdf_label">PDF</string>
+    <string name="knowledge_downloading">Downloading… %1$s</string>
+    <string name="knowledge_doc_unavailable_offline">Document not available offline</string>
+    <string name="knowledge_view_cd">View</string>
+    <string name="doc_error_storage_full">Not enough storage to download this document</string>
+    <string name="doc_type_pdf">PDF</string>
+    <string name="doc_type_presentation">Slides</string>
+    <string name="doc_type_spreadsheet">Spreadsheet</string>
+    <string name="doc_type_document">Document</string>
+    <string name="doc_type_image">Image</string>
+    <string name="doc_type_file">File</string>
+    <!-- Host coaching grid tile (CoachingGridTile). -->
+    <string name="coaching_tile_label">Coaching</string>
+    <string name="coaching_tile_badge_cd">%1$d skipped refreshers</string>
+    <string name="doc_cannot_preview">This file can\'t be previewed in-app</string>
+    <string name="doc_open_with">Open with another app</string>
 
     <!-- ── Refresher tile meta + categories ──────────────────────────────── -->
     <plurals name="refresher_meta_quiz">
@@ -302,6 +320,16 @@
     <string name="category_clinical_assessment">Clinical Assessment</string>
     <string name="category_learning">Learning</string>
     <string name="category_spice_app">SPICE App</string>
+    <!-- Refresher content-type labels (shown on the refresher tile). -->
+    <string name="refresher_type_microcoaching">Microcoaching</string>
+    <string name="refresher_type_learning_card">Learning card</string>
+    <string name="refresher_type_quiz">Quiz</string>
+    <!-- Behavioural-gap severity chips on the refresher tile. -->
+    <string name="severity_high">HIGH</string>
+    <string name="severity_moderate">MODERATE</string>
+    <string name="severity_low">LOW</string>
+    <!-- Refresher last-card footer secondary action. -->
+    <string name="refresher_do_it_later">I\'ll do it later</string>
 
     <!-- ── Training / Knowledge metadata ─────────────────────────────────── -->
     <string name="training_meta_minutes_questions">%1$d min · %2$d questions</string>
@@ -311,6 +339,9 @@
 
     <!-- ── Modules screen header ─────────────────────────────────────────────── -->
     <string name="modules_screen_title">Personalised Coaching</string>
+    <!-- Header subtitle on the coaching modules screen. %1$s is a formatted date-time, e.g. "29 Jun, 14:30". -->
+    <string name="modules_last_synced">Last synced %1$s</string>
+    <string name="modules_last_synced_never">Not synced yet</string>
 
     <!-- ── Answer feedback overlay ───────────────────────────────────────────── -->
     <string name="feedback_why_this_matters">Why this matters</string>
@@ -347,7 +378,7 @@
 
     <!-- ── Download item cards on ModelNotReady screen ─────────────────────────── -->
     <string name="download_card_ai_title">AI Model</string>
-    <string name="download_card_ai_size">~600 MB</string>
+    <string name="download_card_ai_size">~%1$s</string>
     <string name="download_card_voice_title">Bengali Voice Model</string>
     <string name="download_card_voice_size">~90 MB</string>
     <string name="download_card_label_required">Required</string>

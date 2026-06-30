@@ -90,10 +90,11 @@ fun QuickLearnCard(
                     text = stringResource(R.string.quick_learn_tap_to_answer),
                     background = Color.White.copy(alpha = 0.18f),
                 )
-                QuickLearnPill(
-                    text = stringResource(R.string.quick_learn_xp_reward, xpReward),
-                    background = Color.White.copy(alpha = 0.18f),
-                )
+                // Points/XP display temporarily disabled — UI only; [xpReward] + scoring logic retained.
+                // QuickLearnPill(
+                //     text = stringResource(R.string.quick_learn_xp_reward, xpReward),
+                //     background = Color.White.copy(alpha = 0.18f),
+                // )
             }
         }
     }

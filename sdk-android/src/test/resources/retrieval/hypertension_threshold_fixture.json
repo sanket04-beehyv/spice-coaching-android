@@ -1,0 +1,41 @@
+{
+  "id": "hypertension_threshold",
+  "module_family_id": "cf631cda-cf3e-4f0e-8fed-ecfa1daedce8",
+  "title_en": "Hypertension Identification and Management",
+  "cards": [
+    {
+      "title_en": "Understanding Hypertension",
+      "body_en": "Hypertension is diagnosed when blood pressure is 140/90 mmHg or higher on repeated measurement.",
+      "retrieval_hints_en": [
+        "at what blood pressure level is a person considered to have hypertension",
+        "blood pressure 140/90 criteria for hypertension"
+      ]
+    },
+    {
+      "title_en": "Measuring Blood Pressure",
+      "body_en": "Use a calibrated cuff and record systolic and diastolic readings."
+    },
+    {
+      "title_en": "Referral for Hypertension Management",
+      "body_en": "Refer when readings remain high after repeat measurement."
+    }
+  ],
+  "search_metadata": {
+    "synonyms_en": {
+      "BP": "blood pressure",
+      "140/90": "hypertension threshold blood pressure"
+    }
+  },
+  "queries": [
+    {
+      "query": "At what blood pressure level is a person considered to have hypertension?",
+      "expected_card_index": 0,
+      "benchmark_ref": "Q65"
+    },
+    {
+      "query": "hypertensn blood presure 140 90 criteria",
+      "expected_card_index": 0,
+      "benchmark_ref": "Q95"
+    }
+  ]
+}

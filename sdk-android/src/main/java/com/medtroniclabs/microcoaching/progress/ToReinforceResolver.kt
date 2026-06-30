@@ -69,3 +69,23 @@ suspend fun toReinforceQuestionIds(
 
     return toReinforce
 }
+
+/**
+ * Pure (no-DB) variant of [toReinforceQuestionIds] — same formula, but the caller
+ * supplies the already-fetched inputs. Used by [com.medtroniclabs.microcoaching.ui.learn.LearnViewModel.mapModules]
+ * so a screen full of modules doesn't re-query each module's latest-correct /
+ * latest-wrong / partial rows that it already loaded.
+ *
+ * [serverIncomplete] = the partial row's decoded incomplete-quiz ids, or null
+ * when there's no partial row (→ baseline-all, same as the DB variant).
+ */
+fun toReinforceQuestionIds(
+    allQuestionIds: Set<String>,
+    localCorrect: Set<String>,
+    localWrong: Set<String>,
+    serverIncomplete: Set<String>?,
+): Set<String> {
+    if (allQuestionIds.isEmpty()) return emptySet()
+    val baseline = serverIncomplete ?: allQuestionIds
+    return ((baseline + localWrong) - localCorrect) intersect allQuestionIds
+}

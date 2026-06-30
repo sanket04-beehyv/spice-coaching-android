@@ -132,6 +132,7 @@ class GapRuleDispatcherTest {
     ) : BehaviouralGapDao {
         override suspend fun getActiveWithRules(): List<BehaviouralGapEntity> = rows
         override fun getAllActive(): Flow<List<BehaviouralGapEntity>> = error("not used")
+        override suspend fun getAllActiveOnce(): List<BehaviouralGapEntity> = rows
         override suspend fun getById(gapId: String) = rows.firstOrNull { it.gapId == gapId }
         override suspend fun getByCode(gapCode: String) = rows.firstOrNull { it.gapCode == gapCode }
         override suspend fun getByDomain(domain: String) = rows.filter { it.domain == domain }

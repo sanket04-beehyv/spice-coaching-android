@@ -41,6 +41,12 @@ data class ChatMessage(
      * non-grounded messages.
      */
     val groundingModuleFamilyId: String? = null,
+    /**
+     * 1-indexed PDF page the in-app source-document viewer should open at
+     * when a citation chip is tapped. Sourced from the BM25-matched card's
+     * `source_pages` field at message-persist time. Null falls back to page 1.
+     */
+    val startPage: Int? = null,
 ) {
     /** Deprecated id-only view, derived from [sourceDocuments]. */
     @Deprecated("Use sourceDocuments", ReplaceWith("sourceDocuments.map { it.id }"))

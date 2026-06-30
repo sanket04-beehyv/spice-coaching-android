@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * LLM inference engine using MediaPipe GenAI for Gemma 3 1B INT4 models.
  *
- * Supports `.task` model files. For `.litertlm` files use [LiteRtLmService].
+ * Supports `.task` model files — the SDK's only on-device inference engine.
  *
  * Device requirements:
  *   - Minimum: 3 GB RAM, API 24, arm64-v8a
@@ -145,7 +145,14 @@ class GemmaService(private val context: Context) : LLMService {
         })
 
         awaitClose {
-            if (sessionClosed.compareAndSet(false, true)) runCatching { session.close() }
+            // The collector can cancel mid-generation (downstream takeWhile cap,
+            // user closing the sheet). Stop the native generation loop BEFORE
+            // closing the session — closing while a generateResponseAsync is
+            // still producing is the one ordering MediaPipe doesn't guarantee.
+            if (sessionClosed.compareAndSet(false, true)) {
+                if (!streamStopped) runCatching { session.cancelGenerateResponseAsync() }
+                runCatching { session.close() }
+            }
             releaseLock()
         }
     }
@@ -162,7 +169,7 @@ class GemmaService(private val context: Context) : LLMService {
         val config = loadedConfig
         val sessionOptions = LlmInferenceSession.LlmInferenceSessionOptions.builder()
             .setTopK(config?.topK ?: 40)
-            .setTemperature(config?.temperature ?: 0.6f)
+            .setTemperature(config?.temperature ?: 0.3f)
             .build()
         return LlmInferenceSession.createFromOptions(inference, sessionOptions)
     }

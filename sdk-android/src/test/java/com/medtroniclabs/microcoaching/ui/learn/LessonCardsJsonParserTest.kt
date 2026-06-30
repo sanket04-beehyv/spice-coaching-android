@@ -122,4 +122,25 @@ class LessonCardsJsonParserTest {
         assertEquals(1, cards.size)
         assertEquals("শিরোনাম", cards.first().titleBn)
     }
+
+    @Test
+    fun `parses locale-map title and body`() {
+        val json = """
+            [
+              {
+                "title": {"bn": "বাংলা শিরোনাম", "en": "English title"},
+                "body": {
+                  "bn": "বাংলা বিষয়",
+                  "en": "English body"
+                }
+              }
+            ]
+        """.trimIndent()
+
+        val card = parseLessonCards(json).single()
+        assertEquals("বাংলা শিরোনাম", card.titleBn)
+        assertEquals("English title", card.titleEn)
+        assertEquals("বাংলা বিষয়", card.bodyBn)
+        assertEquals("English body", card.bodyEn)
+    }
 }

@@ -12,7 +12,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +56,9 @@ fun ChatInputBar(
     modifier: Modifier = Modifier,
 ) {
     fun submit() {
+        // Stop the mic first so the recognizer doesn't repopulate the field
+        // with a late onResult after we clear it below.
+        if (isRecording) onMicTap?.invoke()
         if (inputState.text.isNotBlank()) {
             onSend(inputState.text.trim())
             inputState.text = ""
@@ -81,12 +84,13 @@ fun ChatInputBar(
                 )
             },
             enabled = enabled,
+            readOnly = isRecording,
             singleLine = false,
             maxLines = 4,
             shape = RoundedCornerShape(40.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                focusedBorderColor = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = if (isRecording) MaterialTheme.colorScheme.error.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
             ),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { submit() }),
@@ -121,7 +125,7 @@ fun ChatInputBar(
                     .background(micBackground),
             ) {
                 Icon(
-                    imageVector = if (isRecording) Icons.Default.MicOff else Icons.Default.Mic,
+                    imageVector = if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
                     contentDescription = stringResource(
                         if (isRecording) {
                             R.string.chat_voice_tap_to_stop

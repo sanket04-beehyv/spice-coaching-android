@@ -3,7 +3,9 @@ package com.medtroniclabs.microcoaching.data.repository
 import com.medtroniclabs.microcoaching.data.db.dao.BehaviouralGapDao
 import com.medtroniclabs.microcoaching.data.db.dao.ModuleDao
 import com.medtroniclabs.microcoaching.data.db.entity.ModuleEntity
+import com.medtroniclabs.microcoaching.data.db.entity.sortedForDisplay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /**
  * Read interface for the v3 module cache. Each `ModuleEntity` is one
@@ -33,7 +35,8 @@ class ModuleRepositoryImpl(
     private val gapDao: BehaviouralGapDao,
 ) : ModuleRepository {
 
-    override fun getAllActive(): Flow<List<ModuleEntity>> = moduleDao.getAllActive()
+    override fun getAllActive(): Flow<List<ModuleEntity>> =
+        moduleDao.getAllActive().map { it.sortedForDisplay() }
 
     override suspend fun getById(moduleId: String): ModuleEntity? = moduleDao.getById(moduleId)
 

@@ -13,12 +13,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import android.text.format.Formatter
+import com.medtroniclabs.microcoaching.MicroCoachingSDK
 import com.medtroniclabs.microcoaching.R
+import com.medtroniclabs.microcoaching.ai.model.ModelCatalog
 import com.medtroniclabs.microcoaching.ui.chat.ChatUiState
 
 /**
@@ -48,6 +53,17 @@ fun ModelNotReadyContent(
 ) {
     val aiItemState = uiState.toAiDownloadItemState(modelPresent = aiModelPresent)
 
+    // Dynamic download size for the AI model — read from the configured model
+    // variant (single source of truth) and formatted via the platform's
+    // locale-aware Formatter, so the label tracks the selected model (e.g. ~304 MB
+    // for Gemma 3 270M q8, ~249 MB for q4) instead of a hard-coded "~600 MB".
+    val context = LocalContext.current
+    val aiSizeLabel = remember {
+        val bytes = runCatching { MicroCoachingSDK.getInstance().selectedModelVariant().sizeInBytes }
+            .getOrElse { ModelCatalog.default().sizeInBytes }
+        Formatter.formatShortFileSize(context, bytes)
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -74,7 +90,7 @@ fun ModelNotReadyContent(
         DownloadItemCard(
             icon = DownloadItemIcon.AiSparkle,
             title = stringResource(R.string.download_card_ai_title),
-            sizeLabel = stringResource(R.string.download_card_ai_size),
+            sizeLabel = stringResource(R.string.download_card_ai_size, aiSizeLabel),
             isRequired = true,
             state = aiItemState,
             onDownload = onRequestAiDownload,

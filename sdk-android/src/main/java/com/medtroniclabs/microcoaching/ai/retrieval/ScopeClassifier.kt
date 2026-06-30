@@ -1,6 +1,11 @@
 package com.medtroniclabs.microcoaching.ai.retrieval
 
 import com.medtroniclabs.microcoaching.data.db.entity.ModuleEntity
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * L1 of chat_plan.md §B4 — cheap pre-LLM gate that rejects out-of-domain queries
@@ -82,7 +87,7 @@ class ScopeClassifier(private val terms: Set<String>) {
             "পরিবার পরিকল্পনা", "জন্মনিয়ন্ত্রণ",
             // Emergency / referrals / danger signs
             "danger", "bleeding", "emergency", "refer", "referral",
-            "convulsion", "seizure", "unconscious", "shock",
+            "convulsion", "seizure", "fits", "unconscious", "shock",
             "বিপদ", "রক্তপাত", "জরুরি", "রেফার",
             // Nutrition / counselling
             "nutrition", "diet", "counsel", "counselling", "counseling",
@@ -94,8 +99,8 @@ class ScopeClassifier(private val terms: Set<String>) {
             "chw", "patient", "visit", "household", "assessment", "screening",
             "রোগী", "ভিজিট", "বাড়ি",
             // Infectious diseases (malaria, TB, sepsis — modules present but terms absent)
-            "malaria", "tuberculosis", "tb", "sepsis",
-            "ম্যালেরিয়া", "যক্ষ্মা", "সেপসিস",
+            "malaria", "tuberculosis", "tb", "sepsis", "itn", "mosquito net",
+            "ম্যালেরিয়া", "যক্ষ্মা", "সেপসিস", "মশারি",
             // Cancer screening
             "cancer", "cervical", "cervix", "breast cancer",
             "ক্যান্সার", "জরায়ু", "স্তন ক্যান্সার",
@@ -144,6 +149,12 @@ class ScopeClassifier(private val terms: Set<String>) {
             "movie", "film", "song", "music", "celebrity", "actor", "actress",
             "joke", "tell me a joke", "story unrelated",
             "চলচ্চিত্র", "গান", "গল্প",
+            // Creative-text generation — the LLM happily obliges, and on the low-end
+            // path a "poem about nature" latched onto a "Nature of Diarrhoea" card.
+            // Kept to unambiguous nouns (no bare "write"/"story" — they collide with
+            // "rewrite"/"history" and would over-refuse clinical requests).
+            "poem", "lyrics", "essay",
+            "কবিতা",
             // Out-of-scope work topics
             "agriculture", "farming", "crop", "harvest", "fishing",
             "business", "stock market", "cryptocurrency", "bitcoin",
@@ -163,21 +174,77 @@ class ScopeClassifier(private val terms: Set<String>) {
          * from "ম্যালেরিয়া বোঝা") passes the in-scope check and reaches BM25 retrieval.
          * Storing full phrases caused false negatives when the user's vocabulary differed
          * from the exact module title.
+         *
+         * Harvested words are filtered against [BanglaTokenizer.STOPWORDS] — the
+         * `length >= 3` gate alone admits function words like "and"/"the" (from
+         * titles such as "Maternal and Neonatal Referral Process"), which then
+         * count as *clinical* overlap in [OffTopicGuard]. That is the verified
+         * hole that let "Breast Engorgement and Pain" pass the garbage guard
+         * against a newborn-warmth card: the only shared "clinical" token was "and".
          */
+        /**
+         * Structural / framing words that appear in card titles & metadata but carry
+         * no clinical meaning. Excluded from harvested DYNAMIC terms only (never from
+         * [STATIC_TERMS] or [ClinicalSynonymMap]) so an everyday word like "nature"
+         * (from "…Nature of Diarrhoea") can't widen the Strict-mode allow-list or
+         * count as clinical overlap in [OffTopicGuard]. Real clinical vocabulary is
+         * unaffected — it lives in the static seed list.
+         */
+        private val GENERIC_HARVEST_STOPWORDS: Set<String> = setOf(
+            "nature", "type", "types", "overview", "importance", "function", "functions",
+            "identifying", "recognizing", "understanding", "examples", "example",
+            "measures", "process", "procedures", "procedure", "role", "basic", "general",
+            "introduction", "about", "definition", "meaning", "guide", "guidelines",
+        )
+
         fun buildFrom(modules: List<ModuleEntity>): ScopeClassifier {
             val dynamic = mutableSetOf<String>()
+            fun harvestTitleWords(title: String?) {
+                title?.takeIf { it.isNotBlank() }?.lowercase()
+                    ?.split(Regex("\\s+"))
+                    ?.filter { w ->
+                        w.length >= 3 &&
+                            w !in BanglaTokenizer.STOPWORDS &&
+                            w !in GENERIC_HARVEST_STOPWORDS
+                    }
+                    ?.forEach { dynamic.add(it) }
+            }
             for (m in modules) {
                 m.domain.takeIf { it.isNotBlank() }?.let { dynamic.add(it.lowercase()) }
                 m.subDomain?.takeIf { it.isNotBlank() }?.let { dynamic.add(it.lowercase()) }
-                m.titleBn.takeIf { it.isNotBlank() }?.lowercase()
-                    ?.split(Regex("\\s+"))?.filter { w -> w.length >= 3 }?.forEach { dynamic.add(it) }
-                m.titleEn?.takeIf { it.isNotBlank() }?.lowercase()
-                    ?.split(Regex("\\s+"))?.filter { w -> w.length >= 3 }?.forEach { dynamic.add(it) }
+                harvestTitleWords(m.titleBn)
+                harvestTitleWords(m.titleEn)
+                // Curated search_metadata vocabulary (keywords / topic tags /
+                // clinical conditions, EN + BN) widens the allow-list with terms a
+                // CHW might type that don't appear in the module title — fewer false
+                // off-scope refusals. Routed through the same word-harvest +
+                // stop-word filter as titles. Full search_phrases are deliberately
+                // skipped: they're whole sentences and would inflate the clinical
+                // overlap set OffTopicGuard reads from scopeTerms().
+                harvestMetadataTerms(m.searchMetadataJson).forEach { harvestTitleWords(it) }
             }
             val all = STATIC_TERMS.map { it.lowercase() }.toSet() +
                 ClinicalSynonymMap.allTerms +
                 dynamic
             return ScopeClassifier(all)
+        }
+
+        private val scopeJson = Json { ignoreUnknownKeys = true; isLenient = true }
+
+        /**
+         * Pull the concise clinical terms out of a module's raw `search_metadata`
+         * JSON: `keywords_en`, `keywords_bn`, `topic_tags`, `clinical_conditions`.
+         * Tolerates missing keys / wrong shapes / unparseable JSON (→ empty list).
+         */
+        private fun harvestMetadataTerms(jsonText: String): List<String> {
+            val obj = runCatching { scopeJson.parseToJsonElement(jsonText) as? JsonObject }
+                .getOrNull() ?: return emptyList()
+            fun strArr(key: String): List<String> =
+                (obj[key] as? JsonArray)
+                    ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf { s -> s.isNotBlank() } }
+                    ?: emptyList()
+            return strArr("keywords_en") + strArr("keywords_bn") +
+                strArr("topic_tags") + strArr("clinical_conditions")
         }
     }
 }

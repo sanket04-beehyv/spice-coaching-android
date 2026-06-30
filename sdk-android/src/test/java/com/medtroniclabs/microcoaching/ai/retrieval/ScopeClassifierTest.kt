@@ -1,24 +1,17 @@
 package com.medtroniclabs.microcoaching.ai.retrieval
 
-import com.medtroniclabs.microcoaching.data.db.entity.ModuleEntity
+import com.medtroniclabs.microcoaching.data.db.entity.moduleEntityFixture
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ScopeClassifierTest {
 
-    private fun moduleWithTitles(titleBn: String, titleEn: String? = null) = ModuleEntity(
+    private fun moduleWithTitles(titleBn: String, titleEn: String? = null) = moduleEntityFixture(
         moduleId = "m1",
         moduleFamilyId = "fam1",
-        version = 1,
         titleBn = titleBn,
         titleEn = titleEn,
-        domain = "rmnch",
-        moduleType = "initial_training",
-        estimatedMinutes = 10,
-        difficultyLevel = "moderate",
-        clinicallyReviewed = true,
-        updatedAtIso = "2026-06-01T00:00:00Z",
     )
 
     // ── Title tokenization fix ────────────────────────────────────────────────
@@ -122,6 +115,58 @@ class ScopeClassifierTest {
         assertTrue(classifier.isInScope("পানিশূন্যতা নির্ণয়"))
     }
 
+    // ── Title harvest must not admit function words as clinical terms ────────
+    //
+    // The `length >= 3` gate alone let "and"/"the" into the gazetteer (from
+    // titles like "Maternal and Neonatal Referral Process"), and OffTopicGuard
+    // then counted "and" as clinical overlap — the verified hole that let a
+    // breast-engorgement query pass the garbage guard against a newborn-warmth
+    // card whose only shared "clinical" token was "and".
+
+    @Test
+    fun `function words from module titles are not harvested as scope terms`() {
+        val classifier = ScopeClassifier.buildFrom(
+            listOf(
+                moduleWithTitles("মডিউল", "Maternal and Neonatal Referral Process"),
+                moduleWithTitles("মডিউল", "Keeping the Newborn Warm"),
+            ),
+        )
+        assertFalse("'and' must not be a scope term", classifier.scopeTerms().contains("and"))
+        assertFalse("'the' must not be a scope term", classifier.scopeTerms().contains("the"))
+        assertTrue(classifier.scopeTerms().contains("maternal"))
+        assertTrue(classifier.scopeTerms().contains("newborn"))
+    }
+
+    @Test
+    fun `guard refuses engorgement query against newborn-warmth card after harvest fix`() {
+        // End-to-end regression of the 2026-06-11 failure: gazetteer built from
+        // real-shaped module titles, guard evaluated against the actual top hit.
+        val classifier = ScopeClassifier.buildFrom(
+            listOf(
+                moduleWithTitles("মডিউল", "Keeping the Newborn Warm"),
+                moduleWithTitles("মডিউল", "Maternal and Neonatal Referral Process"),
+            ),
+        )
+        val newbornWarmthChunk = GroundingChunk(
+            source = GroundingChunk.Source.CARD,
+            moduleFamilyId = "fam1",
+            positionalId = 1,
+            titleEn = "How to Keep Newborns Warm",
+            bodyEn = "To keep newborns warm, they should be dried quickly after birth and wrapped properly.",
+            titleBn = null,
+            bodyBn = null,
+            score = 8.39f,
+        )
+        assertTrue(
+            "zero genuine clinical overlap must refuse — 'and' no longer counts",
+            OffTopicGuard.isClearlyUnanswerable(
+                query = "How can Breast Engorgement and Pain be managed?",
+                topHit = newbornWarmthChunk,
+                clinicalTerms = classifier.scopeTerms(),
+            ),
+        )
+    }
+
     // ── Deny list independence ────────────────────────────────────────────────
 
     @Test
@@ -138,5 +183,62 @@ class ScopeClassifierTest {
         // isOutOfScope should return true.
         val classifier = ScopeClassifier.buildFrom(emptyList())
         assertTrue(classifier.isOutOfScope("ম্যালেরিয়া ক্রিকেট"))
+    }
+
+    // ── Tier 3a: creative-generation requests are denied ─────────────────────
+    //
+    // "poem about nature" latched onto a "Nature of Diarrhoea" card on the
+    // low-end path (no L1 in ExtendedClinical), so L0 deny is the gate.
+
+    @Test
+    fun `creative generation requests are out of scope`() {
+        val classifier = ScopeClassifier.buildFrom(emptyList())
+        assertTrue(classifier.isOutOfScope("Can you write me a poem about nature?"))
+        assertTrue(classifier.isOutOfScope("প্রকৃতি নিয়ে একটা কবিতা লিখে দাও"))
+        assertTrue(classifier.isOutOfScope("write the lyrics to a song"))
+        assertTrue(classifier.isOutOfScope("write an essay about rivers"))
+    }
+
+    @Test
+    fun `deny list additions do not over-refuse clinical requests`() {
+        // Substring-collision guard: bare "write"/"story" were deliberately NOT
+        // added, so these clinical phrasings must NOT be denied.
+        val classifier = ScopeClassifier.buildFrom(emptyList())
+        assertFalse("'history' must not trip 'story'", classifier.isOutOfScope("take the patient history"))
+        assertFalse("'write a referral' must not be denied", classifier.isOutOfScope("write a referral note"))
+        assertFalse(classifier.isOutOfScope("রোগীর হিস্ট্রি নিন"))
+    }
+
+    // ── Tier 3b: generic structural words are not harvested as scope terms ───
+
+    @Test
+    fun `generic title words are not harvested as scope terms`() {
+        val classifier = ScopeClassifier.buildFrom(
+            listOf(moduleWithTitles("মডিউল", "Identifying the Nature of Diarrhoea")),
+        )
+        assertFalse("'nature' must not become a scope term", classifier.scopeTerms().contains("nature"))
+        assertFalse("'identifying' must not become a scope term", classifier.scopeTerms().contains("identifying"))
+        // The genuine clinical word from the title survives.
+        assertTrue(classifier.scopeTerms().contains("diarrhoea"))
+    }
+
+    @Test
+    fun `nature alone is no longer in scope but diarrhoea still is`() {
+        val classifier = ScopeClassifier.buildFrom(
+            listOf(moduleWithTitles("মডিউল", "Identifying the Nature of Diarrhoea")),
+        )
+        // "poem about nature" no longer matches a clinical term via the harvested
+        // "nature"; the diarrhoea card title word remains in scope.
+        assertFalse(classifier.isInScope("a poem about nature"))
+        assertTrue(classifier.isInScope("child has diarrhoea"))
+    }
+
+    // ── Tier 2 STATIC_TERMS parity: fits / itn pass Strict-mode L1 ───────────
+
+    @Test
+    fun `fits and itn are in scope for strict-mode L1`() {
+        val classifier = ScopeClassifier.buildFrom(emptyList())
+        assertTrue(classifier.isInScope("is fits during delivery a danger sign"))
+        assertTrue(classifier.isInScope("what is ITN and when to use it"))
     }
 }

@@ -1,21 +1,20 @@
 package com.medtroniclabs.microcoaching.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.HelpOutline
-import androidx.compose.material.icons.outlined.AccessTime
-import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -24,29 +23,30 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.medtroniclabs.microcoaching.R
 import com.medtroniclabs.microcoaching.ui.SdkLocalizedTheme
 import com.medtroniclabs.microcoaching.ui.theme.SpiceBlue
+import com.medtroniclabs.microcoaching.ui.theme.SpiceBlueContainer
 import com.medtroniclabs.microcoaching.ui.theme.SpiceBlueDark
+import com.medtroniclabs.microcoaching.ui.theme.SpiceNavy
 
 /**
- * Home-screen morning refresher banner. Replaces [LearnCard] when morning
- * cards are available.
+ * Home-screen morning refresher banner — a **minimal** list-style tile (leading
+ * icon block, "Micro-coaching" eyebrow, module title, Skip / Start).
  *
- * Shows module title, lesson-card count, quiz question count, and estimated
- * duration. Start → begins the full lesson-card → quiz flow. Skip → dismisses.
+ * Besides the explicit Skip button, the whole tile can be **swiped away** in a
+ * shallow arc (left or right) to skip — see [Modifier.swipeToDismiss]. Both the
+ * Skip button and a completed swipe call [onSkip].
  *
- * @param cardCount Number of lesson cards in the module.
- * @param questionCount Number of quiz questions.
- * @param estimatedMinutes Estimated completion time.
+ * [cardCount] / [questionCount] / [estimatedMinutes] are retained for call-site
+ * compatibility (the host passes them); the minimal design no longer renders the
+ * meta row.
  */
 @Composable
 fun MorningCard(
@@ -59,68 +59,79 @@ fun MorningCard(
     modifier: Modifier = Modifier,
 ) {
     SdkLocalizedTheme {
-        Column(
+        Card(
             modifier = modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Brush.linearGradient(listOf(SpiceBlue, SpiceBlueDark)))
-                .padding(20.dp),
+                .swipeToDismiss(onDismiss = onSkip, resetKey = moduleTitle),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         ) {
-            Text(
-                text = stringResource(R.string.morning_card_eyebrow),
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.8.sp,
-                ),
-                color = Color.White.copy(alpha = 0.75f),
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = moduleTitle,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                color = Color.White,
-            )
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (cardCount > 0) {
-                    MorningMeta(icon = Icons.Outlined.MenuBook,
-                        label = pluralStringResource(R.plurals.morning_card_meta_cards, cardCount, cardCount))
-                    Spacer(Modifier.width(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(SpiceBlueContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Groups,
+                        contentDescription = null,
+                        tint = SpiceBlueDark,
+                        modifier = Modifier.size(24.dp),
+                    )
                 }
-                if (questionCount > 0) {
-                    MorningMeta(icon = Icons.AutoMirrored.Outlined.HelpOutline,
-                        label = pluralStringResource(R.plurals.banner_meta_questions, questionCount, questionCount))
-                    Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    // Eyebrow = refresher content-type (Microcoaching / Learning card /
+                    // Quiz), mirroring the RefresherTile label. Derived from what the
+                    // module carries: both cards+quiz → Microcoaching; cards-only →
+                    // Learning card; quiz-only → Quiz.
+                    val typeRes = when {
+                        cardCount > 0 && questionCount > 0 -> R.string.refresher_type_microcoaching
+                        cardCount > 0 -> R.string.refresher_type_learning_card
+                        else -> R.string.refresher_type_quiz
+                    }
+                    Text(
+                        text = stringResource(typeRes),
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.4.sp,
+                        ),
+                        color = SpiceBlueDark,
+                    )
+                    Text(
+                        text = moduleTitle,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = SpiceNavy,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-                MorningMeta(icon = Icons.Outlined.AccessTime,
-                    label = stringResource(R.string.banner_meta_minutes, estimatedMinutes))
-            }
-            Spacer(Modifier.height(16.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onSkip) {
+                    Text(
+                        text = stringResource(R.string.card_skip),
+                        color = Color(0xFF6B7280),
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
                 Button(
                     onClick = onStart,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = SpiceBlue),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SpiceBlue,
+                        contentColor = Color.White,
+                    ),
                     shape = RoundedCornerShape(24.dp),
                 ) {
                     Text(stringResource(R.string.banner_action_start), fontWeight = FontWeight.SemiBold)
                 }
-                Spacer(Modifier.width(16.dp))
-                TextButton(onClick = onSkip) {
-                    Text(stringResource(R.string.banner_action_skip),
-                        color = Color.White.copy(alpha = 0.85f), fontWeight = FontWeight.Medium)
-                }
             }
         }
-    }
-}
-
-@Composable
-private fun MorningMeta(icon: ImageVector, label: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(imageVector = icon, contentDescription = null,
-            tint = Color.White.copy(alpha = 0.75f), modifier = Modifier.size(13.dp))
-        Spacer(Modifier.width(4.dp))
-        Text(text = label, style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.85f))
     }
 }

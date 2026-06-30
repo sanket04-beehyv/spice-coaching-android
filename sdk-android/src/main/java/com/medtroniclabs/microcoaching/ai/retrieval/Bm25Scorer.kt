@@ -58,25 +58,49 @@ class Bm25Scorer(
      *
      * BM25 formula: Σ idf(t) · ((k1 + 1) · tf) / (tf + k1 · (1 − b + b · |d| / avgdl))
      */
-    fun score(queryTokens: List<String>, docId: Int): Float {
-        if (queryTokens.isEmpty() || avgDocLen == 0f) return 0f
+    fun score(queryTokens: List<String>, docId: Int): Float =
+        scoreWeighted(queryTokens.distinct().associateWith { 1f }, docId)
+
+    /**
+     * Weighted variant: each query term contributes `weight × bm25(term, doc)`.
+     * Used by [ModuleKnowledgeIndex] so synonym/abbreviation EXPANSION terms can
+     * be down-weighted relative to the words the CHW actually typed — full-weight
+     * expansion is how a "low BP 90/60" question ends up ranking the hypertension
+     * module top (the expansion vocabulary outweighs the original query).
+     */
+    fun scoreWeighted(termWeights: Map<String, Float>, docId: Int): Float {
+        if (termWeights.isEmpty() || avgDocLen == 0f) return 0f
         val dl = docLengths[docId].toFloat()
         val normalization = 1f - b + b * (dl / avgDocLen)
 
         var sum = 0f
-        for (term in queryTokens.distinct()) {
+        for ((term, weight) in termWeights) {
+            if (weight <= 0f) continue
             val termIdf = idf[term] ?: continue
             val tf = invertedIndex[term]?.firstOrNull { it.docId == docId }?.tf?.toFloat() ?: continue
-            sum += termIdf * ((k1 + 1f) * tf) / (tf + k1 * normalization)
+            sum += weight * termIdf * ((k1 + 1f) * tf) / (tf + k1 * normalization)
         }
         return sum
     }
 
+    /**
+     * Number of indexed documents containing [term]. Exposed so the query
+     * expander can distinguish a *vocabulary bridge* (the CHW's term does not
+     * exist anywhere in the corpus → expansion carries full weight) from an
+     * *alias* of a term the corpus already covers (expansion is only a hint →
+     * down-weighted).
+     */
+    fun documentFrequency(term: String): Int = invertedIndex[term]?.size ?: 0
+
     /** Top-K most relevant documents, sorted by descending score. */
-    fun topK(queryTokens: List<String>, k: Int): List<ScoredDoc> {
+    fun topK(queryTokens: List<String>, k: Int): List<ScoredDoc> =
+        topKWeighted(queryTokens.distinct().associateWith { 1f }, k)
+
+    /** Weighted [topK] — see [scoreWeighted]. */
+    fun topKWeighted(termWeights: Map<String, Float>, k: Int): List<ScoredDoc> {
         if (k <= 0 || documents.isEmpty()) return emptyList()
         return documents.indices
-            .map { ScoredDoc(it, score(queryTokens, it)) }
+            .map { ScoredDoc(it, scoreWeighted(termWeights, it)) }
             .filter { it.score > 0f }
             .sortedByDescending { it.score }
             .take(k)

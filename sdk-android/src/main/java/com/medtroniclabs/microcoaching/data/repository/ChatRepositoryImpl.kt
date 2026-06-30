@@ -82,6 +82,7 @@ open class ChatRepositoryImpl(private val dao: ChatMessageDao) {
         // Keep the deprecated id-only column populated (derived) for back-compat.
         sourceDocumentIdsJson = encodeStringList(sourceDocuments.map { it.id }),
         groundingModuleFamilyId = groundingModuleFamilyId,
+        startPage = startPage,
     )
 
     private fun ChatMessageEntity.toModel() = ChatMessage(
@@ -96,6 +97,7 @@ open class ChatRepositoryImpl(private val dao: ChatMessageDao) {
             decodeStringList(sourceDocumentIdsJson).map { SourceDocumentRef(id = it) }
         },
         groundingModuleFamilyId = groundingModuleFamilyId,
+        startPage = startPage,
     )
 
     private fun encodeRefs(refs: List<SourceDocumentRef>): String =

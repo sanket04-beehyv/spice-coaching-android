@@ -4,9 +4,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.rememberAsyncImagePainter
+import com.medtroniclabs.microcoaching.ui.asset.rememberCachedImageFileForUrl
 
 /**
  * Renders a module thumbnail from its already-presigned URL
@@ -26,11 +28,15 @@ fun ModuleThumbnail(
     contentScale: ContentScale = ContentScale.Crop,
     fallback: @Composable BoxScope.() -> Unit = {},
 ) {
+    // Resolve to a locally-cached file so the thumbnail renders offline after
+    // the first online view. Falls through to the placeholder while resolving
+    // or on an offline miss (file == null).
+    val cachedFile by rememberCachedImageFileForUrl(thumbnailUrl)
     Box(modifier) {
         fallback()
-        if (!thumbnailUrl.isNullOrBlank()) {
+        if (cachedFile != null) {
             Image(
-                painter = rememberAsyncImagePainter(model = thumbnailUrl),
+                painter = rememberAsyncImagePainter(model = cachedFile),
                 contentDescription = contentDescription,
                 modifier = Modifier.matchParentSize(),
                 contentScale = contentScale,

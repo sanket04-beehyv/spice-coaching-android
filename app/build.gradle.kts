@@ -28,7 +28,6 @@ android {
         buildConfigField("String", "HF_TOKEN",           "\"${localProps.getProperty("HF_TOKEN", "")}\"")
         buildConfigField("String", "OTEL_ENDPOINT",      "\"${localProps.getProperty("OTEL_ENDPOINT", "")}\"")
         buildConfigField("String", "OTEL_TOKEN",         "\"${localProps.getProperty("OTEL_TOKEN", "")}\"")
-        // Knowledge Layer backend URL. Default: Android emulator → host machine port 8100.
         buildConfigField("String", "COACHING_BACKEND_URL",
             "\"${localProps.getProperty("COACHING_BACKEND_URL", "https://api.microcoaching.example.com")}\"")
     }

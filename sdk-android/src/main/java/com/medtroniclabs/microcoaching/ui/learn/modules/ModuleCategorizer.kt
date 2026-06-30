@@ -29,35 +29,34 @@ data class ModuleSections(
  * Partitions [LearnModule]s into the three sections rendered by
  * [com.medtroniclabs.microcoaching.ui.learn.modules.ModulesScreen]:
  *
- *  - **Training** — `moduleType == "initial_training"`, always. Even
- *    completed initial-training modules render here (the "completed
- *    wins → Knowledge" rule was removed by product direction).
- *  - **Knowledge** — `moduleType == "digital_proficiency"`, always.
- *    Exclusively type-based; status / source / wrong-question count
- *    don't affect placement.
- *  - **Refresher** — "active drilling" queue. Unchanged from the
- *    previous rule:
- *      `(source != null OR moduleType == "refresher")
- *       AND wrongQuestionCount > 0
- *       AND status != "completed"`
- *    This means a morning-card-surfaced `initial_training` module with
- *    wrong questions appears in **both** Refresher *and* Training — the
- *    sections overlap by design (see [ModuleSections]).
+ *  - **Training** — `moduleType == "initial_training"` OR
+ *    `"digital_proficiency"`, always. Even completed modules render here.
+ *    (`digital_proficiency` joined Training when the Knowledge section
+ *    switched from modules to source documents — see below.)
+ *  - **Knowledge** — **no longer a module partition.** The Knowledge
+ *    section now shows the deduped *source documents* of all modules
+ *    (`KnowledgeDocController.knowledgeDocuments`), not modules.
+ *    [ModuleSections.knowledge] is kept (always empty) only to avoid churn in
+ *    existing destructuring; no module is ever placed into it.
+ *  - **Refresher** — "active drilling" queue. **Selector-authoritative:**
+ *      `moduleType != "content_update" AND fromMorningCard`
+ *    A module is a refresher iff the morning-card selector emitted it — it has a
+ *    `morning_card_cache` row from the backend `GET /morning/cards` OR the on-device
+ *    [com.medtroniclabs.microcoaching.domain.gaps.ondevice.OnDeviceMorningGenerator].
+ *    There is **no** mastery/completion/source/wrong-count gating: every
+ *    selector-provided module lands here — even a completed/fully-mastered one (it
+ *    simply sorts last). A `fallback`-sourced card qualifies just like a `gap` one.
+ *    A selector-surfaced `initial_training` module appears in **both** Refresher
+ *    *and* Training — the sections overlap by design (see [ModuleSections]).
  *
- * Modules matching **none** of the above are silently dropped (logged
- * at debug level). Today this includes:
- *   - `content_update` modules (no longer have a section)
- *   - stale `refresher`-type modules with no wrong questions and no
- *     morning-card source
- *   - completed `refresher`-type modules
+ * Modules matching **none** of the above fall through to no section (logged). This
+ * is a categorisation outcome, **not** a "dropper": a selector-provided module
+ * always lands in Refresher. Only these legitimately have no home here:
+ *   - `content_update` modules (no refresher/training section)
+ *   - any non-`initial_training`/`digital_proficiency` module the selector did NOT
+ *     emit (no `morning_card_cache` row) — never meant to surface on this screen
  *
  * The contract is pinned by `ModuleCategorizerTest`.
- *
- * TODO: TO think about
- *
- * `digital_proficiency` modules now all land in Knowledge regardless of
- * progress. `content_update` modules currently have no home. If product
- * wants those to surface differently later, adjust the predicates here.
  */
 object ModuleCategorizer {
 
@@ -76,10 +75,6 @@ object ModuleCategorizer {
                 training += m
                 placed = true
             }
-            if (isKnowledge(m)) {
-                knowledge += m
-                placed = true
-            }
             if (isRefresher(m)) {
                 refreshers += m
                 placed = true
@@ -95,15 +90,18 @@ object ModuleCategorizer {
     }
 
     private fun isTraining(m: LearnModule): Boolean =
-        m.moduleType == "initial_training"
-
-    private fun isKnowledge(m: LearnModule): Boolean =
-        m.moduleType == "digital_proficiency"
+        m.moduleType == "initial_training" || m.moduleType == "digital_proficiency"
 
     private fun isRefresher(m: LearnModule): Boolean {
-        val isRefresherByNature = m.source != null || m.moduleType == "refresher"
-        return isRefresherByNature &&
-            (m.wrongQuestionCount ?: 0) > 0 &&
-            m.status != "completed"
+        // content_update modules have no quiz/drill semantics — never refreshers
+        // (existing contract). If the backend ever emits one as a morning card that's
+        // a contract violation, flagged loudly by CoachingModuleStore.traceSections.
+        if (m.moduleType == "content_update") return false
+        // Selector-authoritative: a module is a refresher iff the morning-card
+        // selector emitted it — i.e. it has a `morning_card_cache` row from the
+        // backend `GET /morning/cards` OR the on-device generator. NO mastery,
+        // completion, source, or wrong-count gating: every selector-provided module
+        // lands on the refresher list, full stop (a completed one simply sorts last).
+        return m.fromMorningCard
     }
 }

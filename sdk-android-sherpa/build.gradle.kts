@@ -26,7 +26,12 @@ val sherpaOnnxVersion = "1.13.2"
 val sherpaOnnxAarName = "sherpa-onnx-$sherpaOnnxVersion.aar"
 val sherpaOnnxAar = file("$projectDir/libs/$sherpaOnnxAarName")
 val sherpaOnnxClassesJar = file("$projectDir/libs/sherpa-onnx-classes.jar")
-val sherpaOnnxJniDir = file("$projectDir/src/main/jniLibs/arm64-v8a")
+val sherpaOnnxJniBaseDir = file("$projectDir/src/main/jniLibs")
+// Ship both ABIs in the AAR: arm64-v8a (field devices + Apple-Silicon emulators)
+// and x86_64 (Intel/Windows dev emulators). The CONSUMING app decides what actually
+// lands in the final APK (via abiFilters or ABI splits), so an arm64-only split
+// strips x86_64 and production size is unaffected.
+val sherpaOnnxAbis = listOf("arm64-v8a", "x86_64")
 
 tasks.register("downloadSherpaAar") {
     description = "Downloads $sherpaOnnxAarName from the k2-fsa GitHub release."
@@ -49,16 +54,18 @@ tasks.register("downloadSherpaAar") {
 }
 
 tasks.register("unpackSherpaAar") {
-    description = "Extracts classes.jar + arm64-v8a/*.so from the .aar."
+    description = "Extracts classes.jar + ${sherpaOnnxAbis.joinToString("/")} *.so from the .aar."
     group = "build setup"
     dependsOn("downloadSherpaAar")
     outputs.file(sherpaOnnxClassesJar)
-    outputs.dir(sherpaOnnxJniDir)
+    outputs.dir(sherpaOnnxJniBaseDir)
     doLast {
         val classesUpToDate = sherpaOnnxClassesJar.exists() &&
             sherpaOnnxClassesJar.lastModified() >= sherpaOnnxAar.lastModified()
-        val jniUpToDate = file("$sherpaOnnxJniDir/libsherpa-onnx-jni.so").exists() &&
-            file("$sherpaOnnxJniDir/libonnxruntime.so").exists()
+        val jniUpToDate = sherpaOnnxAbis.all { abi ->
+            file("$sherpaOnnxJniBaseDir/$abi/libsherpa-onnx-jni.so").exists() &&
+                file("$sherpaOnnxJniBaseDir/$abi/libonnxruntime.so").exists()
+        }
         if (classesUpToDate && jniUpToDate) {
             logger.lifecycle("[sherpa] unpacked artifacts already present — skipping.")
             return@doLast
@@ -75,12 +82,15 @@ tasks.register("unpackSherpaAar") {
             into(sherpaOnnxClassesJar.parentFile)
             rename { "sherpa-onnx-classes.jar" }
         }
-        sherpaOnnxJniDir.mkdirs()
-        copy {
-            from(file("$workDir/jni/arm64-v8a")) { include("*.so") }
-            into(sherpaOnnxJniDir)
+        sherpaOnnxAbis.forEach { abi ->
+            val abiDir = file("$sherpaOnnxJniBaseDir/$abi")
+            abiDir.mkdirs()
+            copy {
+                from(file("$workDir/jni/$abi")) { include("*.so") }
+                into(abiDir)
+            }
+            logger.lifecycle("[sherpa] unpacked ${abiDir.listFiles()?.size ?: 0} .so files into jniLibs/$abi.")
         }
-        logger.lifecycle("[sherpa] unpacked classes.jar + ${sherpaOnnxJniDir.listFiles()?.size ?: 0} .so files into jniLibs.")
     }
 }
 
@@ -98,7 +108,7 @@ android {
         // sherpa-onnx itself declares minSdk 21 in its bundled .aar manifest,
         // so we can match SPICE's minSdk 23 without any override.
         minSdk = 23
-        ndk { abiFilters += "arm64-v8a" }
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         consumerProguardFiles("consumer-rules.pro")
     }
 
@@ -123,7 +133,12 @@ android {
 
     packaging {
         jniLibs {
-            keepDebugSymbols += "*/arm64-v8a/*.so"
+            keepDebugSymbols += "**/*.so"
+            // The Kotlin bindings (com.k2fsa.sherpa.onnx.*) load only
+            // libsherpa-onnx-jni.so. The standalone C / C++ API libs (~4.5 MB)
+            // are for native consumers we don't have — drop them.
+            excludes += "**/libsherpa-onnx-c-api.so"
+            excludes += "**/libsherpa-onnx-cxx-api.so"
         }
     }
 
@@ -141,7 +156,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId = "com.medtroniclabs.microcoaching"
                 artifactId = "sdk-android-sherpa"
-                version = "0.3.7-SNAPSHOT"
+                version = "0.4.0-SNAPSHOT"
             }
         }
     }

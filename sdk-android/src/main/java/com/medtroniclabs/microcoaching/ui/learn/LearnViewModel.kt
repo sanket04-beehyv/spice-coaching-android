@@ -9,16 +9,12 @@ import com.medtroniclabs.microcoaching.Language
 import com.medtroniclabs.microcoaching.MicroCoachingSDK
 import com.medtroniclabs.microcoaching.R
 import com.medtroniclabs.microcoaching.ai.voice.CoachingTtsHelper
-import com.medtroniclabs.microcoaching.data.db.entity.CoachingEventEntity
-import com.medtroniclabs.microcoaching.data.db.entity.ModuleEntity
-import com.medtroniclabs.microcoaching.data.mapper.parseIsoMillis
-import com.medtroniclabs.microcoaching.data.repository.GapProfileRepository
-import com.medtroniclabs.microcoaching.data.repository.GapProfileRepositoryImpl
 import com.medtroniclabs.microcoaching.data.repository.ModuleRepository
 import com.medtroniclabs.microcoaching.data.repository.ModuleRepositoryImpl
-import com.medtroniclabs.microcoaching.domain.telemetry.eventFamilyFor
-import com.medtroniclabs.microcoaching.progress.toReinforceQuestionIds
+import com.medtroniclabs.microcoaching.domain.telemetry.EventRecorder
+import com.medtroniclabs.microcoaching.domain.telemetry.triggerTypeFor
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -26,15 +22,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.util.Locale
-import java.util.UUID
 
 /**
  * ViewModel for the v3 module → lesson → quiz → result flow.
@@ -51,21 +39,44 @@ import java.util.UUID
 class LearnViewModel(
     private val context: Context,
     private val chwId: String,
-    private val gapRepo: GapProfileRepository,
     private val moduleRepo: ModuleRepository,
+    private val telemetry: EventRecorder,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<LearnUiState>(LearnUiState.Loading)
     val uiState: StateFlow<LearnUiState> = _uiState.asStateFlow()
+
+    /**
+     * Knowledge section (document list + download/preview). Extracted to
+     * [KnowledgeDocController]; the four flows below are passthroughs so existing
+     * collectors (CoachingNavGraph, the modules screens) keep reading
+     * `learnVm.knowledgeDocuments` / `cachedDocIds` / `docEvents` /
+     * `downloadProgress` unchanged. Uses [viewModelScope] so an in-flight
+     * download cancels with the screen.
+     */
+    private val knowledgeDocs = KnowledgeDocController(viewModelScope, context)
+    val knowledgeDocuments: StateFlow<List<KnowledgeDocument>> get() = knowledgeDocs.knowledgeDocuments
+    val cachedDocIds: StateFlow<Set<String>> get() = knowledgeDocs.cachedDocIds
+    val docEvents: SharedFlow<DocEvent> get() = knowledgeDocs.docEvents
+    val downloadProgress: StateFlow<DownloadProgress?> get() = knowledgeDocs.downloadProgress
+
+    /**
+     * Categorised module lists + the shared featured pick, projected from the
+     * SDK-owned [com.medtroniclabs.microcoaching.domain.refresher.CoachingModuleStore]
+     * so the modules screen and the home card consume the same source of truth.
+     */
+    val refresherModules: StateFlow<List<LearnModule>>
+        get() = MicroCoachingSDK.getInstance().coachingModuleStore.refresherModules
+    val trainingModules: StateFlow<List<LearnModule>>
+        get() = MicroCoachingSDK.getInstance().coachingModuleStore.trainingModules
+    val selectedMorningCard: StateFlow<LearnModule?>
+        get() = MicroCoachingSDK.getInstance().coachingModuleStore.selectedMorningCard
 
     /** Questions for the currently active module — loaded when the quiz starts. */
     private var activeQuestions: List<QuizQuestion> = emptyList()
 
     /** The module the CHW is currently working through. */
     private var activeModule: LearnModule? = null
-
-    /** In-memory module status map: moduleFamilyId → "assigned"|"in_progress"|"completed". */
-    private val statusByModule: MutableMap<String, String> = mutableMapOf()
 
     /**
      * Last-known mapped module list from [observeModules]. Used by [popToModuleList] to
@@ -149,211 +160,44 @@ class LearnViewModel(
     }
 
     private suspend fun observeModules(sdk: MicroCoachingSDK) {
-        // Combine modules + coaching_event count flows so observeModules re-emits
-        // whenever a module_quiz_attempted row is written (refresher tile counts
-        // update live).
+        // Project the mapped list from the SDK-owned store (the single source of
+        // truth, shared with the home card). The store already reacts to module-
+        // cache changes, coaching_event inserts, and morning-card refreshes.
+        // Combine with the raw module-cache flow so the empty/error decision stays
+        // cache-first: cached rows are always shown; the empty-state message fires
+        // only when the cache is genuinely empty. Knowledge docs are owned by
+        // [KnowledgeDocController], which observes the module cache itself.
         combine(
+            sdk.coachingModuleStore.allModules,
             moduleRepo.getAllActive(),
-            sdk.database.coachingEventDao().getEventCountFlow(),
-        ) { modules, _ -> modules }.collectLatest { modules ->
-            val mapped = mapModules(modules, sdk)
+        ) { mapped, rawRows -> mapped to rawRows }
+            .collectLatest { (mapped, rawRows) ->
+                // Cache the latest mapped list for fast pop-back (avoid Loading flash).
+                lastKnownModules = mapped
 
-            // Cache the latest mapped list for fast pop-back (avoid the Loading flash).
-            lastKnownModules = mapped
-
-            // Only push state if we're currently in a list-viewing state. If the CHW
-            // is deep in the flow (LessonContent, QuizInProgress, QuizResult), a Flow
-            // emission here would otherwise override their state and cause blank /
-            // spinner screens on ModuleDetailScreen, LessonPlayerScreen, etc.
-            val current = _uiState.value
-            val isListState = current is LearnUiState.Loading ||
-                current is LearnUiState.ModuleList ||
-                current is LearnUiState.Error
-            if (isListState) {
-                // Cache-first: if `module_cache` has any rows, we show them — full
-                // stop. Network errors, sync failures, and mapping drops never
-                // override locally-cached content. The empty-state message only
-                // fires when the cache is genuinely empty.
-                _uiState.value = if (modules.isEmpty()) {
-                    LearnUiState.Error(emptyMessage(sdk))
-                } else {
-                    if (mapped.isEmpty()) {
-                        Log.w(
-                            TAG,
-                            "module_cache has ${modules.size} row(s) but mapModules returned 0 — " +
-                                "data issue, not a connectivity issue. Showing empty ModuleList " +
-                                "instead of flipping to Error.",
-                        )
+                // Only push state if we're currently in a list-viewing state. If the
+                // CHW is deep in the flow (LessonContent, QuizInProgress, QuizResult),
+                // a Flow emission here would otherwise override their state and cause
+                // blank / spinner screens on ModuleDetailScreen, LessonPlayerScreen.
+                val current = _uiState.value
+                val isListState = current is LearnUiState.Loading ||
+                    current is LearnUiState.ModuleList ||
+                    current is LearnUiState.Error
+                if (isListState) {
+                    _uiState.value = if (rawRows.isEmpty()) {
+                        LearnUiState.Error(emptyMessage(sdk))
+                    } else {
+                        if (mapped.isEmpty()) {
+                            Log.w(
+                                TAG,
+                                "module_cache has ${rawRows.size} row(s) but the store mapped 0 — " +
+                                    "data issue, not connectivity. Showing empty ModuleList instead of Error.",
+                            )
+                        }
+                        LearnUiState.ModuleList(mapped)
                     }
-                    LearnUiState.ModuleList(mapped)
                 }
             }
-        }
-    }
-
-    /**
-     * Pure mapping from active [ModuleEntity] rows to enriched [LearnModule]
-     * tiles. Reads the latest gap profile, morning-card cache, full + partial
-     * completion rows, and merges them into the per-module status / progress
-     * fraction / "to reinforce" count.
-     *
-     * Used by both the live [observeModules] Flow collector and the one-shot
-     * [refreshModuleCounts] called from the refresher bottom sheet dismiss
-     * path — so the two stay in lock-step instead of diverging.
-     */
-    private suspend fun mapModules(
-        modules: List<ModuleEntity>,
-        sdk: MicroCoachingSDK,
-    ): List<LearnModule> {
-        val gapEntries = gapRepo.getAllForChw(chwId)
-        val activeGapKeys = gapEntries.filter { it.gapActive }.map { it.behaviouralGapId }.toSet()
-
-        // Morning-card enrichment (source / gap id for refresher list + telemetry).
-        val morningCardsByModuleId = sdk.database.morningCardCacheDao()
-            .getAllOrderedOnce()
-            .associateBy { it.moduleId }
-
-        // Seed progress from persisted chw_module_completion + partial-completion
-        // rows. In-session statusByModule always takes priority (the CHW may have
-        // just completed a module in this session); DB rows fill the gaps on
-        // first open after a restart. Partials are server-authoritative for
-        // cross-device recovery — without them, a fresh-device CHW sees no
-        // history because the local `coaching_event` table is empty.
-        val completions = sdk.database.chwModuleCompletionDao()
-            .getAllForChw(chwId)
-            .associateBy { it.moduleFamilyId }
-        val partials = sdk.database.chwModulePartialCompletionDao()
-            .getAllForChw(chwId)
-            .associateBy { it.moduleFamilyId }
-
-        val mapped = modules.mapNotNull { entity ->
-            val completion = completions[entity.moduleFamilyId]
-            val partial = partials[entity.moduleFamilyId]
-            // "completed" is sticky: `completedAt` is only written on a passing
-            // attempt and carried forward across later fails (see
-            // TriggerEvaluator.buildModuleCompletion). A row in
-            // chw_module_completion with `completedAt == null` means the CHW
-            // has attempted but never passed — that's in_progress, not done.
-            val persistedStatus = when {
-                completion?.completedAt != null -> "completed"
-                completion != null || partial != null -> "in_progress"
-                else -> "assigned"
-            }
-            // Prefer in-session value; fall back to DB-derived status.
-            val status = statusByModule[entity.moduleFamilyId] ?: persistedStatus
-            // Sync in-memory map so future observeModules calls are consistent.
-            if (!statusByModule.containsKey(entity.moduleFamilyId) && persistedStatus != "assigned") {
-                statusByModule[entity.moduleFamilyId] = persistedStatus
-            }
-
-            val card = morningCardsByModuleId[entity.moduleId]
-
-            // Build the module shell first so we can use its inlineQuestions to
-            // compute both wrongQuestionCount and the merged quizScorePct.
-            val shell = entity.toLearnModule(
-                status = status,
-                gapCode = null,
-                behaviouralGapId = card?.behaviouralGapId,
-                source = card?.source,
-                quizScorePct = null,
-            ) ?: return@mapNotNull null
-
-            val totalQ = shell.inlineQuestions?.size ?: 0
-            val questionIds = shell.inlineQuestions?.map { it.id }?.toSet().orEmpty()
-
-            val toReinforce: Set<String> = if (totalQ == 0) {
-                emptySet()
-            } else {
-                toReinforceQuestionIds(
-                    db = sdk.database,
-                    chwId = chwId,
-                    moduleFamilyId = entity.moduleFamilyId,
-                    allQuestionIds = questionIds,
-                )
-            }
-            val wrongCount = toReinforce.size
-
-            // Distinct quiz questions ever attempted (right OR wrong). Powers the
-            // training-card progress bar (see [TrainingGrid.progressFractionFor]
-            // and PM direction in DM.txt). Bounded by [questionIds] so stale rows
-            // from deleted/renumbered questions don't inflate the count.
-            //
-            // Cache-first: when the backend-supplied completion record says the
-            // CHW passed the module (`completedAt != null`, persisted in
-            // `chw_module_completion` by SyncApi.pullGaps), trust it as "all
-            // questions attempted at some point" — the local coaching_event log
-            // might be empty on a fresh device or after a Room wipe, but the
-            // cached completion is authoritative. Without this clamp, a
-            // backfilled-from-backend completion would render 0/N in the UI.
-            val attemptedCount: Int = when {
-                totalQ == 0 -> 0
-                completion?.completedAt != null -> totalQ
-                else -> {
-                    val dao = sdk.database.coachingEventDao()
-                    val correctIds = dao.getLatestCorrectQuestionIds(chwId, entity.moduleFamilyId)
-                    val wrongIds = dao.getLatestWrongQuestionIds(chwId, entity.moduleFamilyId)
-                    (correctIds.toSet() + wrongIds.toSet()).intersect(questionIds).size
-                }
-            }
-
-            // Progress prioritization:
-            //   passed-completion > partial > failed-completion > assigned
-            // Partial path uses the merged toReinforce so the bar reflects
-            // cumulative ever-correct fraction (option B from plan); falls
-            // back to `latestQuizScore` only when no partial has landed yet.
-            val quizScore: Float? = when {
-                completion?.completedAt != null -> 1f
-                partial != null && totalQ > 0 ->
-                    ((totalQ - wrongCount).coerceAtLeast(0)).toFloat() / totalQ
-                completion != null -> completion.latestQuizScore
-                else -> null
-            }
-
-            // Publication time — see [QuizRetryGate]. ISO 8601 from the
-            // backend module sync, parsed via the existing helper. Drop this
-            // assignment (and the field on LearnModule) when removing the
-            // retry-window feature; nothing else in the data path depends on it.
-            val publishedAtMs: Long? = parseIsoMillis(entity.publishedAtIso)
-
-            shell.copy(
-                quizScorePct = quizScore,
-                wrongQuestionCount = wrongCount,
-                attemptedQuestionCount = attemptedCount,
-                publishedAtMs = publishedAtMs,
-            )
-        }.sortedWith(
-            compareBy(
-                { if (it.behaviouralGapId != null && activeGapKeys.contains(it.behaviouralGapId)) 0 else 1 },
-                {
-                    when (it.status) {
-                        "in_progress" -> 0
-                        "assigned" -> 1
-                        "completed" -> 2
-                        else -> 3
-                    }
-                },
-            )
-        )
-
-        val refresherCount = mapped.count {
-            it.moduleType == "refresher" && !it.inlineQuestions.isNullOrEmpty()
-        }
-        val refresherEmpty = mapped.count {
-            it.moduleType == "refresher" && it.inlineQuestions.isNullOrEmpty()
-        }
-        val trainingCount = mapped.count { it.moduleType != "refresher" && it.moduleType != "content_update" }
-        val knowledgeCount = mapped.count { it.moduleType == "content_update" }
-        val sourceGap = mapped.count { it.source == "gap" }
-        val sourceFallback = mapped.count { it.source == "fallback" }
-        val sourceNull = mapped.count { it.source == null }
-        Log.i(
-            TAG,
-            "mapModules: total=${mapped.size} refreshers=$refresherCount " +
-                "(skipped_empty=$refresherEmpty) training=$trainingCount knowledge=$knowledgeCount | " +
-                "source: gap=$sourceGap fallback=$sourceFallback null=$sourceNull",
-        )
-
-        return mapped
     }
 
     /**
@@ -409,6 +253,11 @@ class LearnViewModel(
         return ctx.getString(resId)
     }
 
+    // ── Knowledge documents (delegated to KnowledgeDocController) ───────────────
+
+    /** Download/stream + preview a Knowledge document — see [KnowledgeDocController]. */
+    fun openKnowledgeDocument(doc: KnowledgeDocument) = knowledgeDocs.openKnowledgeDocument(doc)
+
     // ── Navigation transitions ────────────────────────────────────────────────
 
     fun selectModule(module: LearnModule) {
@@ -419,12 +268,13 @@ class LearnViewModel(
         // be overridden by this in-memory map and the module would jump back
         // to the Training row.
         if (module.status != "completed") {
-            statusByModule[module.moduleFamilyId] = "in_progress"
+            MicroCoachingSDK.getInstance().coachingModuleStore
+                .setInSessionStatus(module.moduleFamilyId, "in_progress")
         }
         _uiState.value = LearnUiState.ModuleReady(module)
         viewModelScope.launch {
             // Surfacing a module to the CHW maps to backend `module_delivered`.
-            recordEvent(
+            telemetry.recordCoachingEvent(
                 eventType = "module_delivered",
                 clinicalDomain = module.clinicalDomain,
                 cardType = "info",
@@ -481,19 +331,22 @@ class LearnViewModel(
      * refresh when the state was `QuizResult` (the post-quiz state when the
      * sheet dismisses), leaving stale refresher / banner / morning-card UI.
      *
-     * Reads from Room one-shot via [MicroCoachingSDK.database.moduleDao] +
-     * [mapModules] so the result matches what the live [observeModules] Flow
-     * would produce on its next tick — no race with the async event-count
-     * Flow.
+     * Reads the latest mapped list straight from the SDK store (which already
+     * reflects the freshly-synced progress, since the dismiss path triggers a
+     * coaching_event / refilter that the store reacts to) so the result matches
+     * what the live [observeModules] Flow would produce on its next tick.
      */
     fun refreshModuleCounts() {
         viewModelScope.launch {
             val sdk = MicroCoachingSDK.getInstance()
-            val modules = sdk.database.moduleDao().getAllOrderedOnce()
-            val mapped = mapModules(modules, sdk)
+            // Nudge the store to re-read morning_card_cache + progress, then take
+            // its current snapshot for an instant restore (no Loading flash).
+            sdk.coachingModuleStore.invalidate()
+            val mapped = sdk.coachingModuleStore.allModules.value
             lastKnownModules = mapped
             // Cache-first: gate on raw `module_cache` row count, not mapped size.
-            _uiState.value = if (modules.isEmpty()) {
+            val rawCount = moduleRepo.countActive()
+            _uiState.value = if (rawCount == 0) {
                 LearnUiState.Error(emptyMessage(sdk))
             } else {
                 LearnUiState.ModuleList(mapped)
@@ -512,7 +365,8 @@ class LearnViewModel(
     fun startCourse() {
         val module = activeModule ?: return
         if (module.status != "completed") {
-            statusByModule[module.moduleFamilyId] = "in_progress"
+            MicroCoachingSDK.getInstance().coachingModuleStore
+                .setInSessionStatus(module.moduleFamilyId, "in_progress")
         }
         startedViaCourse = true
     }
@@ -563,7 +417,7 @@ class LearnViewModel(
     fun recordCardShown(cardIndex: Int) {
         val module = activeModule ?: return
         viewModelScope.launch {
-            recordEvent(
+            telemetry.recordCoachingEvent(
                 eventType = "module_card_viewed",
                 clinicalDomain = module.clinicalDomain,
                 cardType = "info",
@@ -579,7 +433,7 @@ class LearnViewModel(
         _uiState.value = LearnUiState.LessonContent(module)
         viewModelScope.launch {
             // Recording the first card view as the CHW enters the lesson body.
-            recordEvent(
+            telemetry.recordCoachingEvent(
                 eventType = "module_card_viewed",
                 clinicalDomain = module.clinicalDomain,
                 cardType = "info",
@@ -598,7 +452,7 @@ class LearnViewModel(
         viewModelScope.launch {
             activeQuestions = module.inlineQuestions ?: emptyList()
             _uiState.value = LearnUiState.QuizInProgress(questions = activeQuestions)
-            recordEvent(
+            telemetry.recordCoachingEvent(
                 eventType = "quiz_started",
                 clinicalDomain = module.clinicalDomain,
                 cardType = "quiz",
@@ -617,7 +471,8 @@ class LearnViewModel(
      */
     fun selectModuleForQuiz(module: LearnModule) {
         activeModule = module
-        statusByModule[module.moduleFamilyId] = "in_progress"
+        MicroCoachingSDK.getInstance().coachingModuleStore
+            .setInSessionStatus(module.moduleFamilyId, "in_progress")
         startedViaRefresher = true
         _quizCorrectCount = 0
         _quizTotalCount = 0
@@ -628,7 +483,7 @@ class LearnViewModel(
                 "type=${module.moduleType} questionCount=${questions.size}",
         )
         viewModelScope.launch {
-            recordEvent(
+            telemetry.recordCoachingEvent(
                 eventType = "module_delivered",
                 clinicalDomain = module.clinicalDomain,
                 cardType = "info",
@@ -639,7 +494,7 @@ class LearnViewModel(
             )
             activeQuestions = questions
             _uiState.value = LearnUiState.QuizInProgress(questions = activeQuestions)
-            recordEvent(
+            telemetry.recordCoachingEvent(
                 eventType = "quiz_started",
                 clinicalDomain = module.clinicalDomain,
                 cardType = "quiz",
@@ -664,7 +519,7 @@ class LearnViewModel(
     ) {
         val isCorrect = answerIndex == question.correctIndex
         viewModelScope.launch {
-            recordEvent(
+            telemetry.recordCoachingEvent(
                 eventType = "module_quiz_attempted",
                 clinicalDomain = module.clinicalDomain,
                 cardType = "quiz",
@@ -696,7 +551,7 @@ class LearnViewModel(
         if (isCorrect) _quizCorrectCount++
         val scorePct = _quizCorrectCount.toFloat() / _quizTotalCount
         viewModelScope.launch {
-            recordEvent(
+            telemetry.recordCoachingEvent(
                 eventType = "module_quiz_attempted",
                 clinicalDomain = activeModule?.clinicalDomain,
                 cardType = "quiz",
@@ -747,7 +602,16 @@ class LearnViewModel(
             else -> localized(R.string.badge_practice)
         }
 
-        statusByModule[module.moduleFamilyId] = if (passed) "completed" else "in_progress"
+        MicroCoachingSDK.getInstance().coachingModuleStore
+            .setInSessionStatus(module.moduleFamilyId, if (passed) "completed" else "in_progress")
+
+        // XP from the shared learning-points config: every attempted question
+        // earns the base, each correct answer the multiplier, plus a flat
+        // completion reward (reaching this screen ⇒ all questions attempted).
+        val earnedXp = sdk.learningPoints.value.moduleQuizXp(
+            questionsAttempted = state.questions.size,
+            correctAnswers = correctCount,
+        )
 
         _uiState.value = LearnUiState.QuizResult(
             scorePercent = scorePercent,
@@ -757,18 +621,16 @@ class LearnViewModel(
             completedModuleFamilyId = module.moduleFamilyId,
             questions = state.questions,
             answers = state.answers,
+            earnedXp = earnedXp,
         )
 
         viewModelScope.launch {
-            state.questions.forEachIndexed { idx, question ->
-                val isCorrect = state.answers[idx] == question.correctIndex
-                gapRepo.recordQuizAnswer(
-                    chwId = chwId,
-                    behaviouralGapId = activeModule?.behaviouralGapId,
-                    clinicalDomain = module.clinicalDomain,
-                    isCorrect = isCorrect,
-                )
-            }
+            // Gap state is no longer mutated here: the per-question
+            // `module_quiz_attempted` events emitted by `selectAnswer` are the
+            // single input, and `OnDeviceGapStateEngine` derives gap state from
+            // them (replayed over the synced baseline). Keeping the baseline
+            // table backend-authored is what makes the merge correct.
+
             // Persist module completion + emit quiz_completed telemetry.
             sdk.onModuleQuizCompleted(
                 moduleFamilyId = module.moduleFamilyId,
@@ -776,7 +638,7 @@ class LearnViewModel(
                 scoreFraction = scorePercent / 100f,
                 passed = passed,
             )
-            recordEvent(
+            telemetry.recordCoachingEvent(
                 eventType = "module_quiz_attempted",
                 clinicalDomain = module.clinicalDomain,
                 cardType = "quiz",
@@ -789,7 +651,7 @@ class LearnViewModel(
                 triggerType = triggerTypeFor(module.source),
             )
             if (passed) {
-                recordEvent(
+                telemetry.recordCoachingEvent(
                     eventType = "module_completed",
                     clinicalDomain = module.clinicalDomain,
                     cardType = "info",
@@ -818,208 +680,35 @@ class LearnViewModel(
         }
     }
 
-    // ── Event recording ───────────────────────────────────────────────────────
-
-    /**
-     * Maps a [LearnModule.source] value to the wire `trigger_type` per v1.1
-     * Events-Modelling spec:
-     *  - `"gap"` (gap-driven refresher) → `"gap"`
-     *  - `"fallback"` (server fallback recommendation) → `"fallback"`
-     *  - null (regular training-row quiz, no morning surface) → `"workflow_event"`
-     */
-    private fun triggerTypeFor(source: String?): String = when (source) {
-        "gap" -> "gap"
-        "fallback" -> "fallback"
-        else -> "workflow_event"
-    }
-
-    private suspend fun recordEvent(
-        eventType: String,
-        clinicalDomain: String? = null,
-        cardType: String? = null,
-        quizQuestionId: String? = null,
-        selectedOption: Int? = null,
-        isCorrect: Boolean? = null,
-        moduleFamilyId: String? = null,
-        moduleId: String? = null,
-        moduleVersion: Int? = null,
-        cardFamilyId: String? = null,
-        quizFamilyId: String? = null,
-        quizScorePct: Float? = null,
-        outcomeOverride: String? = null,
-        behaviouralGapId: String? = null,
-        triggerType: String? = null,
-        inferenceMode: String? = null,
-        networkState: String? = null,
-    ) {
-        try {
-            val sdk = MicroCoachingSDK.getInstance()
-            val db = sdk.database
-            val sdkVersion = try {
-                context.packageManager
-                    .getPackageInfo(context.packageName, 0)
-                    .versionName ?: "0.0"
-            } catch (_: Exception) { "0.0" }
-
-            // v1.1 Events-Modelling spec uses "correct" / "wrong" — keep the
-            // per-question default in sync with the aggregate finishQuiz path.
-            val outcome = outcomeOverride ?: when {
-                eventType == "module_quiz_attempted" && isCorrect != null ->
-                    if (isCorrect) "correct" else "wrong"
-                else -> null
-            }
-
-            // Default network state from the SDK's ConnectivityManager snapshot
-            // when the caller hasn't supplied one — mirrors the value the chat
-            // layer's currentNetworkState() helper uses, so dashboards see one
-            // vocabulary across event families.
-            val resolvedNetworkState = networkState
-                ?: if (sdk.isNetworkAvailable()) "online" else "offline"
-
-            db.coachingEventDao().insert(
-                CoachingEventEntity(
-                    eventId = UUID.randomUUID().toString(),
-                    sdkVersion = sdkVersion,
-                    eventFamily = eventFamilyFor(eventType),
-                    sessionId = sessionId,
-                    chwId = chwId,
-                    eventType = eventType,
-                    clinicalDomain = clinicalDomain,
-                    cardType = cardType,
-                    triggerType = triggerType,
-                    inferenceMode = inferenceMode,
-                    quizQuestionId = quizQuestionId,
-                    selectedOption = selectedOption,
-                    isCorrect = isCorrect,
-                    outcome = outcome,
-                    moduleFamilyId = moduleFamilyId,
-                    moduleId = moduleId,
-                    moduleVersion = moduleVersion,
-                    cardFamilyId = cardFamilyId,
-                    quizFamilyId = quizFamilyId,
-                    quizScorePct = quizScorePct,
-                    behaviouralGapId = behaviouralGapId,
-                    networkState = resolvedNetworkState,
-                )
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to record event '$eventType': ${e.message}")
-        }
-    }
-
-    // ── Language ──────────────────────────────────────────────────────────────
-
-    private val lang: String
-        get() = if (MicroCoachingSDK.getInstance().config.language == Language.ENGLISH) "en" else "bn"
-
-    // ── Mapping helpers ───────────────────────────────────────────────────────
-
-    private fun ModuleEntity.toLearnModule(
-        status: String,
-        gapCode: String?,
-        behaviouralGapId: String? = null,
-        source: String? = null,
-        quizScorePct: Float? = null,
-    ): LearnModule? {
-        val l = lang
-        val firstCard = try {
-            Json.parseToJsonElement(cardsJson).jsonArray.firstOrNull()?.jsonObject
-        } catch (_: Exception) { null }
-
-        // Prefer the module-level title — the first-card title is only a fallback
-        // for legacy modules that don't carry their own title. Training/Knowledge
-        // cards and screen headers all want the module title (e.g. "Introduction
-        // to NCDs"), not the first card title (e.g. "What are NCDs?").
-        val moduleTitle = if (l == "en") (titleEn ?: titleBn) else (titleBn ?: titleEn)
-        val title = moduleTitle
-            ?: firstCard?.primitiveOrNull("title_$l")
-            ?: firstCard?.primitiveOrNull("title_bn")
-            ?: return null
-        // `body_*` in the v3.5+ module schema is a JSON array of rich-content
-        // blocks (paragraph / bullet_list / video / …), not a string. The
-        // [LearnModule.body] surface here is just the tile-card preview, so
-        // when the card body isn't a flat string we fall through to the
-        // module-level description fields. Rich rendering of the array form
-        // is handled by RichBody downstream once the lesson player opens.
-        val body = firstCard?.primitiveOrNull("body_$l")
-            ?: firstCard?.primitiveOrNull("body_bn")
-            ?: (if (l == "en") descriptionEn else null) ?: descriptionBn ?: descriptionEn ?: ""
-        val nextStep = firstCard?.primitiveOrNull("next_action_$l")
-            ?: firstCard?.primitiveOrNull("next_action_bn") ?: ""
-
-        val inlineQuestions = parseInlineQuiz(quizJson, l)
-        val quizIds = inlineQuestions.map { it.id }
-
-        val firstCardFamilyId = firstCard?.primitiveOrNull("card_family_id")
-
-        // content_update fields — present only on cards whose parent module is
-        // a content_update type. Pulled from the first card row so the
-        // Knowledge preview screen can render the protocol-change framing.
-        val previousPracticeBn = firstCard?.primitiveOrNull("previous_practice_bn")
-        val currentPracticeBn = firstCard?.primitiveOrNull("current_practice_bn")
-        val rationaleForChangeBn = firstCard?.primitiveOrNull("rationale_for_change_bn")
-        val nextActionBn = firstCard?.primitiveOrNull("next_action_bn")
-
-        return LearnModule(
-            moduleFamilyId = moduleFamilyId,
-            title = title,
-            body = body,
-            clinicalDomain = gapCode ?: domain ?: "general",
-            warningSigns = emptyList(),
-            nextStep = nextStep,
-            referralDestination = null,
-            quizIds = quizIds,
-            status = status,
-            inlineQuestions = inlineQuestions.takeIf { it.isNotEmpty() },
-            moduleId = moduleId,
-            moduleVersion = version,
-            cardFamilyId = firstCardFamilyId,
-            moduleType = moduleType,
-            estimatedMinutes = estimatedMinutes,
-            previousPracticeBn = previousPracticeBn,
-            currentPracticeBn = currentPracticeBn,
-            rationaleForChangeBn = rationaleForChangeBn,
-            nextActionBn = nextActionBn,
-            behaviouralGapId = behaviouralGapId,
-            source = source,
-            cardsJson = cardsJson,
-            quizScorePct = quizScorePct,
-            thumbnailUrl = thumbnailUrl,
-        )
-    }
-
-    private fun JsonPrimitive.contentOrNullSafe(): String? =
-        if (this is JsonNull) null else content
-
-    /**
-     * Safely read a string from [JsonObject] at [key], returning null when the
-     * value is missing, JSON null, or anything other than a primitive (e.g.
-     * a `JsonArray` of rich-content blocks under `body_bn` / `body_en` in the
-     * post-2026-06 module sync schema). The previous code chained
-     * `.jsonPrimitive` which throws `IllegalArgumentException` on non-primitive
-     * elements; this accessor returns null instead so the caller's fallback
-     * chain (`?: descriptionEn` etc.) can take over.
-     */
-    private fun JsonObject.primitiveOrNull(key: String): String? =
-        (this[key] as? JsonPrimitive)?.contentOrNullSafe()
-
     // ── Companion / Factory ───────────────────────────────────────────────────
 
     companion object {
         private const val TAG = "LearnViewModel"
 
-        private val sessionId: String = UUID.randomUUID().toString()
-
         fun factory(context: Context, chwId: String): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    val db = MicroCoachingSDK.getInstance().database
+                    val sdk = MicroCoachingSDK.getInstance()
+                    val db = sdk.database
+                    val appCtx = context.applicationContext
+                    // Preserve the exact value recordEvent historically wrote to
+                    // the `sdk_version` column: the SPICE host app's versionName.
+                    val appVersion = runCatching {
+                        appCtx.packageManager
+                            .getPackageInfo(appCtx.packageName, 0)
+                            .versionName
+                    }.getOrNull() ?: "0.0"
                     return LearnViewModel(
-                        context = context.applicationContext,
+                        context = appCtx,
                         chwId = chwId,
-                        gapRepo = GapProfileRepositoryImpl(db.chwGapProfileDao()),
                         moduleRepo = ModuleRepositoryImpl(db.moduleDao(), db.behaviouralGapDao()),
+                        telemetry = EventRecorder(
+                            dao = db.coachingEventDao(),
+                            sessionId = sdk.coachingSessionId,
+                            chwId = chwId,
+                            appVersionName = appVersion,
+                        ),
                     ) as T
                 }
             }

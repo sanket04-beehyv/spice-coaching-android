@@ -4,14 +4,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,65 +29,81 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.medtroniclabs.microcoaching.R
+import com.medtroniclabs.microcoaching.ui.document.DocumentFileType
+import com.medtroniclabs.microcoaching.ui.document.icon
+import com.medtroniclabs.microcoaching.ui.document.labelRes
 import com.medtroniclabs.microcoaching.ui.theme.SpiceBlueContainer
 import com.medtroniclabs.microcoaching.ui.theme.SpiceBlueDark
 import com.medtroniclabs.microcoaching.ui.theme.SpiceNavy
 
 /**
- * Horizontal Knowledge-section card for `content_update` modules — read-only
- * preview. No progress bar, no quiz CTA. Carries a "READ" pill in the
- * top-right hero corner so the read-only intent is unambiguous.
+ * Horizontal Knowledge-section card for a **source document**.
+ *
+ * - Top half: thumbnail (from the per-document presigned URL if available);
+ *   fallback shows a gradient + centred file-type icon so the card is never
+ *   blank (and the icon gives the user a visual cue — PDF, slides, etc.).
+ * - Bottom: title + file-type label (derived from the filename extension) +
+ *   a trailing affordance. When [cached] is false this is a download icon; once
+ *   the document is on disk it becomes a "view" (eye) icon — mirroring
+ *   [ModuleTile]'s Knowledge variant. Tapping the card downloads (cached for
+ *   offline) and opens the in-app preview.
  */
 @Composable
 fun KnowledgeCard(
     title: String,
-    excerpt: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     thumbnailUrl: String? = null,
+    fileName: String? = null,
+    cached: Boolean = false,
 ) {
+    val fileType = DocumentFileType.fromFilename(fileName)
+
     Card(
         onClick = onClick,
+        // Width comes from the caller (KnowledgeRow sets a fixed tile width);
+        // height is fixed so all tiles in the row line up.
         modifier = modifier
-            .width(240.dp)
             .height(200.dp),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Box(
+            ModuleThumbnail(
+                thumbnailUrl = thumbnailUrl,
+                contentDescription = title,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(96.dp)
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)),
-                contentAlignment = Alignment.TopEnd,
-            ) {
-                ModuleThumbnail(
-                    thumbnailUrl = thumbnailUrl,
-                    contentDescription = title,
-                    modifier = Modifier.matchParentSize(),
-                    fallback = {
-                        Box(
-                            modifier = Modifier
-                                .matchParentSize()
-                                .background(
-                                    Brush.linearGradient(
-                                        colors = listOf(SpiceBlueContainer, Color(0xFFFBEFEA)),
-                                    ),
+                fallback = {
+                    // Gradient background + centred file-type icon — shown when
+                    // the thumbnail is null, still loading, or fails to load.
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(SpiceBlueContainer, Color(0xFFFBEFEA)),
                                 ),
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = fileType.icon,
+                            contentDescription = null,
+                            tint = SpiceBlueDark.copy(alpha = 0.5f),
+                            modifier = Modifier.size(36.dp),
                         )
-                    },
-                )
-                ReadPill(modifier = Modifier.padding(8.dp))
-            }
+                    }
+                },
+            )
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
                     text = title,
@@ -91,33 +112,26 @@ fun KnowledgeCard(
                     overflow = TextOverflow.Ellipsis,
                     color = SpiceNavy,
                 )
-                Text(
-                    text = excerpt,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF6B7280),
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Box(modifier = Modifier.weight(1f))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = if (cached) Icons.Outlined.Visibility else Icons.Outlined.FileDownload,
+                        contentDescription = stringResource(
+                            if (cached) R.string.knowledge_view_cd else R.string.modules_download_cd,
+                        ),
+                        tint = SpiceBlueDark,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = stringResource(fileType.labelRes),
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = SpiceBlueDark,
+                    )
+                }
             }
         }
-    }
-}
-
-@Composable
-private fun ReadPill(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(SpiceBlueDark)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.badge_read),
-            color = Color.White,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.5.sp,
-            ),
-        )
     }
 }

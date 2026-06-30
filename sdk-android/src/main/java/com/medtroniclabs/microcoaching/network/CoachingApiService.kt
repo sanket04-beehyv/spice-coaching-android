@@ -1,5 +1,6 @@
 package com.medtroniclabs.microcoaching.network
 
+import com.medtroniclabs.microcoaching.data.localized.LocalizedText
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -25,7 +26,7 @@ import retrofit2.http.Query
  *   GET  /sync/gaps                  — v3 behavioural-gap taxonomy
  *   GET  /sync/triggers              — v3 trigger definitions + module bindings
  *   GET  /sync/snippets              — v3 reusable card snippets
- *   GET  /sync/config                — v3 config thresholds (404 on current backend; SDK tolerates)
+ *   GET  /sync/config                — v3 config thresholds
  *   GET  /morning/cards/{chw_id}     — online morning module selection (router not yet mounted)
  *   POST /telemetry/events           — outbound event upload
  *   GET  /health                     — liveness probe
@@ -50,10 +51,17 @@ interface CoachingApiService {
      * [since] is the ISO 8601 watermark from the previous call (`server_time_utc`
      * in the response). The backend requires this query parameter on every call;
      * pass [SyncDefaults.EPOCH_ISO] for first sync to receive the full catalogue.
+     *
+     * [userId] is the host-supplied CHW id. The backend returns the **full module
+     * catalogue** regardless (cached in `module_cache`, powers BM25) AND, when
+     * `user_id` is present, the `assigned_module_ids` for that user — so one call
+     * feeds both the catalogue and the `assigned_module` table. Nullable: Retrofit
+     * drops a null `@Query`, in which case `assigned_module_ids` comes back empty.
      */
     @GET("sync/modules")
     suspend fun pullModules(
         @Query("since") since: String,
+        @Query("user_id") userId: String? = null,
     ): Response<ModulesSyncBundle>
 
     /**
@@ -97,6 +105,31 @@ interface CoachingApiService {
     ): Response<SourceDocumentPresignedUrlResponse>
 
     /**
+     * Fetch one page of the published source-document catalogue — the durable
+     * source for the Knowledge section. Each entry carries display metadata plus
+     * inline presigned URLs for the document and (when present) its thumbnail, so
+     * no follow-up presigned call is needed to render or open it.
+     *
+     * Paginated via [limit] / [offset]; the SDK pulls with a large [limit]
+     * (≈200) and advances [offset] until a short page signals the end.
+     */
+    @GET("sync/source-documents/published")
+    suspend fun getPublishedSourceDocuments(
+        @Query("limit") limit: Int = 200,
+        @Query("offset") offset: Int = 0,
+    ): Response<PublishedSourceDocumentsResponse>
+
+    /**
+     * Resolve a batch of source-document IDs to short-lived presigned GET URLs
+     * for their **thumbnail** images. Mirrors the module-thumbnail endpoint.
+     * Partial-success — missing IDs come back in `missing_ids`.
+     */
+    @POST("sync/source-documents/presigned-thumbnails")
+    suspend fun getSourceDocumentThumbnailPresignedUrls(
+        @Body request: SourceDocumentThumbnailPresignedUrlRequest,
+    ): Response<SourceDocumentThumbnailPresignedUrlResponse>
+
+    /**
      * Resolve a batch of module `module_id`s to short-lived presigned GET URLs
      * for their thumbnail images. Used to populate the module list tiles and the
      * module detail header.
@@ -135,6 +168,17 @@ interface CoachingApiService {
      */
     @POST("coaching/counselling")
     suspend fun generateCounsellingCard(@Body request: ContextPackRequest): Response<CounsellingCardResponse>
+
+    /**
+     * Backend RAG chat endpoint. Embeds [RagQueryRequest.question], retrieves top similar
+     * published modules server-side, and returns a grounded answer with source documents.
+     *
+     * Used as the primary chat path when the device is online (any device class).
+     * On failure the caller falls back to the local path appropriate for the device
+     * (Gemma for normal, BM25 for low-end).
+     */
+    @POST("coaching/rag-query")
+    suspend fun ragQuery(@Body request: RagQueryRequest): Response<RagQueryResponse>
 
     /**
      * Retrieve the backend-prioritised morning module list for a CHW.
@@ -258,6 +302,15 @@ data class ModulesSyncBundle(
      * reconcile.
      */
     @SerialName("retired_family_ids") val retiredFamilyIds: List<String> = emptyList(),
+    /**
+     * Module ids (the version `module.id`, the backend's unit of assignment)
+     * assigned to the `user_id` on the request. The full current assignment set,
+     * resolved across every assignment_type (individual / po_sk / geographical /
+     * group). Drives the `assigned_module` table — the Training screen filters to
+     * these while the chatbot/BM25 keeps the full `modules` catalogue. Empty when
+     * no `user_id` was sent or the user has no assignments.
+     */
+    @SerialName("assigned_module_ids") val assignedModuleIds: List<String> = emptyList(),
     @SerialName("server_time_utc") val serverTimeUtc: String,
 )
 
@@ -272,10 +325,12 @@ data class ModuleSyncPayload(
     @SerialName("id") val id: String,
     @SerialName("module_family_id") val moduleFamilyId: String,
     @SerialName("version") val version: Int,
-    @SerialName("title_bn") val titleBn: String,
-    @SerialName("title_en") val titleEn: String? = null,
-    @SerialName("description_bn") val descriptionBn: String? = null,
-    @SerialName("description_en") val descriptionEn: String? = null,
+    @SerialName("title") val title: LocalizedText? = null,
+    @SerialName("title_bn") val titleBnLegacy: String? = null,
+    @SerialName("title_en") val titleEnLegacy: String? = null,
+    @SerialName("description") val description: LocalizedText? = null,
+    @SerialName("description_bn") val descriptionBnLegacy: String? = null,
+    @SerialName("description_en") val descriptionEnLegacy: String? = null,
     @SerialName("domain") val domain: String,
     @SerialName("sub_domain") val subDomain: String? = null,
     @SerialName("module_type") val moduleType: String,
@@ -287,7 +342,8 @@ data class ModuleSyncPayload(
     @SerialName("published_at") val publishedAt: String? = null,
     @SerialName("updated_at") val updatedAt: String,
     @SerialName("cards") val cards: List<JsonObject> = emptyList(),
-    @SerialName("quiz") val quiz: List<ModuleQuizQuestionPayload> = emptyList(),
+    /** Opaque quiz rows — preserved verbatim in `quiz_json` (new + legacy shapes). */
+    @SerialName("quiz") val quiz: List<JsonObject> = emptyList(),
     /**
      * UUIDs of training-PDF source documents the module was authored from.
      * Surfaced in chat citation chips; dereferenced via
@@ -310,7 +366,32 @@ data class ModuleSyncPayload(
      * payloads that don't carry the flag.
      */
     @SerialName("has_thumbnail") val hasThumbnail: Boolean = false,
-)
+    /**
+     * Module-level author/clinician-curated retrieval hints (`keywords_en`,
+     * `keywords_bn`, `search_phrases_en/bn`, `synonyms_en`, `topic_tags`,
+     * `clinical_conditions`, …). Kept opaque here and parsed structurally on the
+     * device by [com.medtroniclabs.microcoaching.ai.retrieval.ModuleKnowledgeIndex]
+     * — the shape carries many optional sub-keys and is additive, so we don't
+     * pin a typed model. Null/absent for legacy payloads.
+     */
+    @SerialName("search_metadata") val searchMetadata: JsonObject? = null,
+    /** The module's primary behavioural gap; null when the module has none. */
+    @SerialName("primary_gap_id") val primaryGapId: String? = null,
+    /** All behavioural-gap UUIDs this module addresses (primary + secondary). */
+    @SerialName("behavioural_gap_ids") val behaviouralGapIds: List<String> = emptyList(),
+) {
+    /** Merged title from nested `title` map or legacy flat keys. */
+    fun resolvedTitle(): LocalizedText {
+        if (title != null && !title.isBlank()) return title
+        return LocalizedText.fromBnEn(titleBnLegacy, titleEnLegacy)
+    }
+
+    /** Merged description from nested `description` map or legacy flat keys. */
+    fun resolvedDescription(): LocalizedText {
+        if (description != null && !description.isBlank()) return description
+        return LocalizedText.fromBnEn(descriptionBnLegacy, descriptionEnLegacy)
+    }
+}
 
 /**
  * One rich source-document reference from the module sync payload's
@@ -327,6 +408,35 @@ data class SourceDocumentRef(
     @SerialName("title") val title: String? = null,
     @SerialName("original_filename") val originalFilename: String? = null,
     @SerialName("has_thumbnail") val hasThumbnail: Boolean = false,
+)
+
+// ── Published source-document catalogue (GET /sync/source-documents/published) ─
+
+/**
+ * Response for the published source-document catalogue. Mirrors the
+ * `source-doc-knowledge.json` reference shape. Unknown fields are ignored.
+ */
+@Serializable
+data class PublishedSourceDocumentsResponse(
+    @SerialName("source_documents") val sourceDocuments: List<PublishedSourceDocumentItem> = emptyList(),
+    @SerialName("missing_ids") val missingIds: List<String> = emptyList(),
+    @SerialName("server_time_utc") val serverTimeUtc: String? = null,
+)
+
+/**
+ * One published source document with inline presigned URLs. The `*_expires_seconds`
+ * fields are URL lifetimes (relative seconds), converted to absolute epoch-second
+ * expiries when persisted.
+ */
+@Serializable
+data class PublishedSourceDocumentItem(
+    @SerialName("source_document_id") val sourceDocumentId: String,
+    @SerialName("title") val title: String? = null,
+    @SerialName("original_filename") val originalFilename: String? = null,
+    @SerialName("presigned_url") val presignedUrl: String? = null,
+    @SerialName("presigned_expires_seconds") val presignedExpiresSeconds: Long? = null,
+    @SerialName("thumbnail_presigned_url") val thumbnailPresignedUrl: String? = null,
+    @SerialName("thumbnail_presigned_expires_seconds") val thumbnailPresignedExpiresSeconds: Long? = null,
 )
 
 // ── Source-document presigned URL endpoint ────────────────────────────────────
@@ -347,6 +457,28 @@ data class SourceDocumentPresignedUrlEntry(
 @Serializable
 data class SourceDocumentPresignedUrlResponse(
     @SerialName("urls") val urls: List<SourceDocumentPresignedUrlEntry> = emptyList(),
+    @SerialName("missing_ids") val missingIds: List<String> = emptyList(),
+    @SerialName("server_time_utc") val serverTimeUtc: String? = null,
+)
+
+// ── Source-document thumbnail presigned URL endpoint ─────────────────────────
+
+@Serializable
+data class SourceDocumentThumbnailPresignedUrlRequest(
+    @SerialName("source_document_ids") val sourceDocumentIds: List<String>,
+)
+
+@Serializable
+data class SourceDocumentThumbnailPresignedUrlEntry(
+    @SerialName("source_document_id") val sourceDocumentId: String,
+    @SerialName("storage_path") val storagePath: String,
+    @SerialName("presigned_url") val presignedUrl: String,
+    @SerialName("expires_seconds") val expiresSeconds: Long,
+)
+
+@Serializable
+data class SourceDocumentThumbnailPresignedUrlResponse(
+    @SerialName("urls") val urls: List<SourceDocumentThumbnailPresignedUrlEntry> = emptyList(),
     @SerialName("missing_ids") val missingIds: List<String> = emptyList(),
     @SerialName("server_time_utc") val serverTimeUtc: String? = null,
 )
@@ -423,6 +555,7 @@ data class ModuleQuizQuestionPayload(
 data class GapsSyncBundle(
     @SerialName("behavioural_gaps") val behaviouralGaps: List<BehaviouralGapSyncPayload> = emptyList(),
     @SerialName("chw_behavioural_gap_states") val chwBehaviouralGapStates: List<ChwBehaviouralGapStateSyncPayload> = emptyList(),
+    @SerialName("chw_quiz_question_states") val chwQuizQuestionStates: List<ChwQuizQuestionStateSyncPayload> = emptyList(),
     @SerialName("chw_module_completions") val chwModuleCompletions: List<ChwModuleCompletionSyncPayload> = emptyList(),
     @SerialName("chw_module_partial_completions") val chwModulePartialCompletions: List<ChwModulePartialCompletionSyncPayload> = emptyList(),
     @SerialName("server_time_utc") val serverTimeUtc: String,
@@ -451,6 +584,22 @@ data class ChwBehaviouralGapStateSyncPayload(
     @SerialName("occurrence_count") val occurrenceCount: Int,
     @SerialName("failed_attempts_count") val failedAttemptsCount: Int,
     @SerialName("last_failed_attempt_at") val lastFailedAttemptAt: String? = null,
+    @SerialName("escalated_to_supervisor") val escalatedToSupervisor: Boolean,
+    @SerialName("status") val status: String,
+    @SerialName("updated_at") val updatedAt: String? = null,
+)
+
+/** Quiz-level refresher state (`chw_quiz_question_state`); quiz-mode `/sync/gaps`. */
+@Serializable
+data class ChwQuizQuestionStateSyncPayload(
+    @SerialName("chw_id") val chwId: String,
+    @SerialName("quiz_id") val quizId: String,
+    @SerialName("module_id") val moduleId: String,
+    @SerialName("tenant_id") val tenantId: String? = null,
+    @SerialName("failed_attempts_count") val failedAttemptsCount: Int,
+    @SerialName("last_failed_attempt_at") val lastFailedAttemptAt: String? = null,
+    @SerialName("first_attempt_at") val firstAttemptAt: String? = null,
+    @SerialName("last_attempt_at") val lastAttemptAt: String? = null,
     @SerialName("escalated_to_supervisor") val escalatedToSupervisor: Boolean,
     @SerialName("status") val status: String,
     @SerialName("updated_at") val updatedAt: String? = null,
@@ -513,7 +662,9 @@ data class TriggerDefinitionSyncPayload(
 data class ModuleTriggerBindingSyncPayload(
     @SerialName("id") val id: String,
     @SerialName("trigger_definition_id") val triggerDefinitionId: String,
-    @SerialName("module_family_id") val moduleFamilyId: String,
+    // Backend binds a trigger to a specific published `module_id`; the SDK resolves
+    // it to the module's family (one binding row per family) at sync time.
+    @SerialName("module_id") val moduleId: String,
     @SerialName("relationship") val relationship: String,
     @SerialName("priority_weight") val priorityWeight: Int,
     @SerialName("notes") val notes: String? = null,
@@ -603,10 +754,12 @@ data class MorningCardsResponse(
 data class MorningModuleSuggestionItem(
     @SerialName("module_id") val moduleId: String,
     @SerialName("module_family_id") val moduleFamilyId: String,
-    /** "gap" | "fallback" — drives the GAP badge in the refresher list. */
+    /** "quiz" | "gap" | "fallback" — drives the GAP badge in the refresher list. */
     @SerialName("source") val source: String,
     /** Non-null when source == "gap". Forwarded to telemetry payload_json. */
     @SerialName("behavioural_gap_id") val behaviouralGapId: String? = null,
+    /** Non-null when source == "quiz" — the `module_quiz_question.id`. */
+    @SerialName("quiz_id") val quizId: String? = null,
 )
 
 // ── Health (GET /health) ──────────────────────────────────────────────────────
@@ -614,4 +767,57 @@ data class MorningModuleSuggestionItem(
 @Serializable
 data class HealthResponse(
     @SerialName("status") val status: String,
+)
+
+// ── RAG chat (POST /coaching/rag-query) ───────────────────────────────────────
+
+@Serializable
+data class RagQueryRequest(
+    @SerialName("question") val question: String,
+    @SerialName("response_language") val responseLanguage: String,
+    @SerialName("module_limit") val moduleLimit: Int = 5,
+    @SerialName("presigned_url_ttl_seconds") val presignedUrlTtlSeconds: Int = 3600,
+)
+
+@Serializable
+data class RagQueryResponse(
+    @SerialName("answer") val answer: String,
+    @SerialName("retrieved_modules") val retrievedModules: List<RagRetrievedModule> = emptyList(),
+    @SerialName("source_documents") val sourceDocuments: List<RagSourceDocument> = emptyList(),
+    @SerialName("model") val model: String? = null,
+    @SerialName("cited_module_ids") val citedModuleIds: List<String> = emptyList(),
+)
+
+@Serializable
+data class RagRetrievedModule(
+    @SerialName("module_id") val moduleId: String,
+    @SerialName("title_bn") val titleBn: String? = null,
+    @SerialName("title_en") val titleEn: String? = null,
+    @SerialName("domain") val domain: String? = null,
+    @SerialName("cosine_distance") val cosineDistance: Double? = null,
+)
+
+@Serializable
+data class RagSourceDocument(
+    @SerialName("source_document_id") val sourceDocumentId: String,
+    @SerialName("title") val title: String? = null,
+    @SerialName("original_filename") val originalFilename: String? = null,
+    @SerialName("source_type") val sourceType: String? = null,
+    @SerialName("page_numbers") val pageNumbers: List<Int> = emptyList(),
+    @SerialName("source_pages") val sourcePages: List<RagSourcePage> = emptyList(),
+    /**
+     * Presigned URL returned inline by the backend. Captured for future optimisation
+     * (skipping the separate getSourceDocumentPresignedUrls call) but not used yet —
+     * DocumentPreviewActivity always fetches via the existing endpoint.
+     */
+    @SerialName("presigned_url") val presignedUrl: String? = null,
+    @SerialName("presigned_expires_seconds") val presignedExpiresSeconds: Int? = null,
+    @SerialName("linked_module_ids") val linkedModuleIds: List<String> = emptyList(),
+)
+
+@Serializable
+data class RagSourcePage(
+    @SerialName("page_number") val pageNumber: Int,
+    @SerialName("start_ms") val startMs: Int? = null,
+    @SerialName("end_ms") val endMs: Int? = null,
 )

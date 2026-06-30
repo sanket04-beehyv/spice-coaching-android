@@ -100,4 +100,15 @@ data class ChatMessageEntity(
      */
     @ColumnInfo(name = "grounding_module_family_id")
     val groundingModuleFamilyId: String? = null,
+
+    /**
+     * 1-indexed PDF page the in-app source-document viewer should open at
+     * when a citation chip on this message is tapped. Sourced from the
+     * BM25-matched card's `source_pages` field at message-persist time.
+     * Null for user messages, refusals, messages whose grounding card has
+     * no `source_pages`, and pre-v20 history — all of which open the
+     * source PDF at page 1.
+     */
+    @ColumnInfo(name = "start_page")
+    val startPage: Int? = null,
 )

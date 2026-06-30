@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -50,7 +51,9 @@ private val META_TEXT_COLOR = Color(0xFF6B7280)
  * Full-width horizontal list-row tile for a module: leading thumbnail, title +
  * subtitle, and a trailing circular affordance that depends on [variant].
  *
- * - [ModuleTileVariant.KNOWLEDGE] → a circular download button ([onDownloadClick]).
+ * - [ModuleTileVariant.KNOWLEDGE] → a circular download button, or a "view"
+ *   (eye) button when [knowledgeCached] is true (the document is already on
+ *   disk — tapping previews it offline).
  * - [ModuleTileVariant.TRAINING]  → a circular completion ring driven by
  *   [progress] (0f–1f), with the percentage in the centre.
  *
@@ -66,6 +69,7 @@ fun ModuleTile(
     thumbnailUrl: String? = null,
     progress: Float = 0f,
     onDownloadClick: (() -> Unit)? = null,
+    knowledgeCached: Boolean = false,
 ) {
     Card(
         onClick = onClick,
@@ -122,7 +126,8 @@ fun ModuleTile(
 
             // ── Trailing affordance (variant-specific) ──────────────────────
             when (variant) {
-                ModuleTileVariant.KNOWLEDGE -> DownloadButton(
+                ModuleTileVariant.KNOWLEDGE -> KnowledgeAction(
+                    cached = knowledgeCached,
                     onClick = onDownloadClick ?: onClick,
                 )
                 ModuleTileVariant.TRAINING -> CompletionRing(
@@ -133,9 +138,12 @@ fun ModuleTile(
     }
 }
 
-/** Circular light-blue download button — the Knowledge-variant trailing action. */
+/**
+ * Circular light-blue trailing action for the Knowledge variant: a download icon
+ * normally, or a "view" (eye) icon once the document is [cached] on disk.
+ */
 @Composable
-private fun DownloadButton(onClick: () -> Unit) {
+private fun KnowledgeAction(cached: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(40.dp)
@@ -145,8 +153,10 @@ private fun DownloadButton(onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = Icons.Outlined.FileDownload,
-            contentDescription = stringResource(R.string.modules_download_cd),
+            imageVector = if (cached) Icons.Outlined.Visibility else Icons.Outlined.FileDownload,
+            contentDescription = stringResource(
+                if (cached) R.string.knowledge_view_cd else R.string.modules_download_cd,
+            ),
             tint = SpiceBlueDark,
             modifier = Modifier.size(20.dp),
         )
